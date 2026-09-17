@@ -477,7 +477,23 @@ def build_half_shell(sampler_tree, bridge_tree):
     link(tree, n19, "Geometry", n19b, "Geometry")
     in_sock(n19b, "Distance").default_value = 0.01
 
-    frame6 = make_frame(tree, "6. СБОРКА ПОЛОВИНЫ ОБОЛОЧКИ + СВАРКА ШВОВ", [n19, n19b])
+    # ВАЖНО (ещё одни грабли, обнаруженные при сборке Группы 4 - буленовы
+    # UNION/DIFFERENCE с этой оболочкой давали "дырявые" края даже когда
+    # обе фигуры сами по себе были корректны). Проверка через
+    # bmesh.calc_volume(signed=True) показала ОТРИЦАТЕЛЬНЫЙ объём - все
+    # нормали половины оболочки были развёрнуты ВНУТРЬ. Замкнутость
+    # (0 граничных рёбер) и характеристика Эйлера на это не реагируют
+    # (это топологические, а не ориентационные инварианты) - баг
+    # оставался незаметен, пока Группа 4 не начала делать Boolean
+    # UNION/DIFFERENCE, для которых согласованное направление нормалей
+    # критично. Разворачиваем нормали целиком одним узлом.
+    n19c = add_node(tree, "GeometryNodeFlipFaces", "3a.19c",
+                     "Развернуть нормали наружу (были инвертированы)",
+                     2300, 500)
+    link(tree, n19b, "Geometry", n19c, "Mesh")
+
+    frame6 = make_frame(tree, "6. СБОРКА ПОЛОВИНЫ ОБОЛОЧКИ + СВАРКА ШВОВ + РАЗВОРОТ НОРМАЛЕЙ",
+                         [n19, n19b, n19c])
 
     # -- проверка замкнутости --
     v01 = add_node(tree, "GeometryNodeInputMeshEdgeNeighbors", "V3a.1",
@@ -492,7 +508,7 @@ def build_half_shell(sampler_tree, bridge_tree):
     v03 = add_node(tree, "GeometryNodeAttributeStatistic", "V3a.3",
                     "Сумма граничных рёбер по всему мешу",
                     2920, 200, domain='EDGE')
-    link(tree, n19b, "Geometry", v03, "Geometry")
+    link(tree, n19c, "Mesh", v03, "Geometry")
     link(tree, v02, "Result", v03, "Attribute")
 
     v04 = add_node(tree, "FunctionNodeCompare", "V3a.4",
@@ -509,7 +525,7 @@ def build_half_shell(sampler_tree, bridge_tree):
     link(tree, v03, "Sum", n20, "Value")
     in_sock(n20, "Decimals").default_value = 0
 
-    tree.links.new(n19b.outputs["Geometry"], gout.inputs["Mesh"])
+    tree.links.new(n19c.outputs["Mesh"], gout.inputs["Mesh"])
     tree.links.new(v04.outputs["Result"], gout.inputs["Провер_Замкнуто_OK"])
     tree.links.new(n20.outputs["String"], gout.inputs["Провер_Отчёт"])
 
