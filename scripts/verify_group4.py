@@ -102,25 +102,38 @@ def build_full_master():
     master.links.new(g2.outputs["Профиль_точки"], g4.inputs["Профиль_точки"])
     master.links.new(g2.outputs["Точек_в_кольце"], g4.inputs["Точек_в_кольце"])
     master.links.new(g2.outputs["Колец_всего"], g4.inputs["Колец_всего"])
+    master.links.new(g1.outputs["Факт_длина_дуги_мм"], g4.inputs["Длина_сегмента_мм"])
     master.links.new(g4.outputs["VIS_Вместе"], gout.inputs["Geometry"])
 
     if "Провер_ВСЕ_OK" not in [s.name for s in master.interface.items_tree
                                 if s.item_type == 'SOCKET' and s.in_out == 'OUTPUT']:
         master.interface.new_socket(name="Провер_ВСЕ_OK", in_out='OUTPUT', socket_type='NodeSocketBool')
         master.interface.new_socket(name="Провер_Отчёт", in_out='OUTPUT', socket_type='NodeSocketString')
+        master.interface.new_socket(name="Провер_Зазор_до_трубки_OK", in_out='OUTPUT',
+                                     socket_type='NodeSocketBool')
     master.links.new(g4.outputs["Провер_ВСЕ_OK"], gout.inputs["Провер_ВСЕ_OK"])
     master.links.new(g4.outputs["Провер_Отчёт"], gout.inputs["Провер_Отчёт"])
+    master.links.new(g4.outputs["Провер_Зазор_до_трубки_OK"], gout.inputs["Провер_Зазор_до_трубки_OK"])
 
     return obj, mod, master, g1, g2, g3, g4, inserts_tree
+
+
+G1_PARAMS = {"Длина_сегмента_мм"}
 
 
 def run_case(label, g4_params, out_dir):
     obj, mod, master, g1, g2, g3, g4, inserts_tree = build_full_master()
 
+    from build_group1_axis import GROUP_NAME as AXIS_GROUP_NAME
+    axis_tree = bpy.data.node_groups[AXIS_GROUP_NAME]
     for k, v in g4_params.items():
-        set_input(g4, inserts_tree, k, v)
+        if k in G1_PARAMS:
+            set_input(g1, axis_tree, k, v)
+        else:
+            set_input(g4, inserts_tree, k, v)
 
     bake_output_as_attribute(mod, master, "Провер_ВСЕ_OK", "chk_ok")
+    bake_output_as_attribute(mod, master, "Провер_Зазор_до_трубки_OK", "chk_clr")
 
     bpy.context.view_layer.update()
     deps = bpy.context.evaluated_depsgraph_get()
@@ -128,6 +141,7 @@ def run_case(label, g4_params, out_dir):
     me = obj_eval.to_mesh()
     stats = mesh_stats(me)
     chk_ok = read_attr(me, "chk_ok")
+    chk_clr = read_attr(me, "chk_clr")
     obj_eval.to_mesh_clear()
 
     print(f"=== Кейс: {label} ===")
@@ -135,6 +149,7 @@ def run_case(label, g4_params, out_dir):
     print(f"  Вершин VIS_Вместе: {stats['n']}")
     print(f"  BBox (X,Y,Z) мм: {tuple(round(c,1) for c in stats['bbox'])}")
     print(f"  Провер_ВСЕ_OK = {chk_ok}")
+    print(f"  Провер_Зазор_до_трубки_OK = {chk_clr}")
 
     # bmesh double-check watertight per half
     import bmesh
@@ -183,7 +198,7 @@ def run_case(label, g4_params, out_dir):
     bpy.data.objects.remove(light, do_unlink=True)
     bpy.data.lights.remove(light_data)
 
-    return {"label": label, "bbox": stats["bbox"], "ok": chk_ok, "verts": stats["n"]}
+    return {"label": label, "bbox": stats["bbox"], "ok": chk_ok, "clr_ok": chk_clr, "verts": stats["n"]}
 
 
 def main():
@@ -198,6 +213,8 @@ def main():
     results.append(run_case("fat_tube", {"Трубка_диаметр_мм": 32.0}, out_dir))
     results.append(run_case("thin_tube", {"Трубка_диаметр_мм": 18.0}, out_dir))
     results.append(run_case("big_magnets", {"Магнит_диаметр_мм": 12.0, "Магнит_глубина_мм": 5.0}, out_dir))
+    results.append(run_case("short_cover", {"Длина_сегмента_мм": 200.0}, out_dir))
+    results.append(run_case("no_rib", {"Закладная_ребро_мм": 0.0}, out_dir))
 
     print("\n=== ИТОГ ===")
     all_ok = True
@@ -206,7 +223,7 @@ def main():
         if not r["ok"]:
             all_ok = False
         print(f"  {r['label']:12s} bbox={tuple(round(c,1) for c in r['bbox'])} "
-              f"verts={r['verts']} check={status}")
+              f"verts={r['verts']} check={status} зазор_трубка={r['clr_ok']}")
     print("ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ" if all_ok else "ЕСТЬ ПРОВАЛЕННЫЕ ПРОВЕРКИ")
 
     blend_path = os.path.join(out_dir, "group4_inserts.blend")

@@ -100,6 +100,7 @@ def build_full_master():
     master.links.new(g2.outputs["Профиль_точки"], g4.inputs["Профиль_точки"])
     master.links.new(g2.outputs["Точек_в_кольце"], g4.inputs["Точек_в_кольце"])
     master.links.new(g2.outputs["Колец_всего"], g4.inputs["Колец_всего"])
+    master.links.new(g1.outputs["Факт_длина_дуги_мм"], g4.inputs["Длина_сегмента_мм"])
 
     master.links.new(g4.outputs["Перед"], g5.inputs["Перед"])
     master.links.new(g4.outputs["Зад"], g5.inputs["Зад"])
