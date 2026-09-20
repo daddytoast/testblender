@@ -69,25 +69,39 @@ def build():
                description="Кривая оси из Группы 1 (NK.1_Ось, выход 'Ось_кривая'), "
                             "уже равномерно передискретизированная.")
 
+    s_len = add_input(tree, "Длина_сегмента_мм", "NodeSocketFloat",
+                       default=350.0, min_value=150.0, max_value=500.0,
+                       description="То же значение, что в Группе 1 (Длина_сегмента_мм или "
+                                    "выход 'Факт_длина_дуги_мм') — нужно, чтобы перевести "
+                                    "измерения 'мм от колена' в долю длины оси.")
+
+    s_side = add_input(tree, "Сторона_ноги", "NodeSocketFloat",
+                        default=1.0, min_value=-1.0, max_value=1.0,
+                        description="1 = правая нога, -1 = левая — из Группы 1 (выход "
+                                     "'Сторона_ноги'). Зеркалит смещение гребня.")
+
     s_c1 = add_input(tree, "Обхват_Точка1_мм", "NodeSocketFloat",
                       default=220.0, min_value=150.0, max_value=350.0,
-                      description="Обхват (длина окружности) в нижней контрольной точке "
-                                   "(типично над лодыжками), мм.")
-    s_c1f = add_input(tree, "Точка1_доля_от_колена", "NodeSocketFloat",
-                       default=0.88, min_value=0.0, max_value=1.0,
-                       description="Высота нижней точки обхвата, доля длины от колена вниз.")
+                      description="Обхват (длина окружности) в одной из контрольных точек "
+                                   "(типично над лодыжками), мм. Порядок Точка1/Точка2 не "
+                                   "важен — группа сама определяет, какая точка выше.")
+    s_c1f = add_input(tree, "Точка1_мм_от_колена", "NodeSocketFloat",
+                       default=308.0, min_value=0.0, max_value=480.0,
+                       description="Высота точки обхвата 1 — мм от колена вниз (замер лентой). "
+                                    "308мм ≈ у лодыжек при длине сегмента 350мм.")
     s_c2 = add_input(tree, "Обхват_Точка2_мм", "NodeSocketFloat",
                       default=340.0, min_value=250.0, max_value=450.0,
-                      description="Обхват в верхней контрольной точке (типично зона "
+                      description="Обхват в другой контрольной точке (типично зона "
                                    "максимума икры), мм.")
-    s_c2f = add_input(tree, "Точка2_доля_от_колена", "NodeSocketFloat",
-                       default=0.30, min_value=0.0, max_value=1.0,
-                       description="Высота верхней точки обхвата, доля длины от колена вниз.")
+    s_c2f = add_input(tree, "Точка2_мм_от_колена", "NodeSocketFloat",
+                       default=105.0, min_value=0.0, max_value=480.0,
+                       description="Высота точки обхвата 2 — мм от колена вниз. "
+                                    "105мм ≈ зона максимума икры при длине 350мм.")
 
-    s_calf_h = add_input(tree, "Высота_икры_доля_от_колена", "NodeSocketFloat",
-                          default=0.30, min_value=0.10, max_value=0.60,
-                          description="Центр выступа икры, доля от колена вниз. "
-                                       "Держите тем же, что в Группе 1.")
+    s_calf_h = add_input(tree, "Высота_икры_мм_от_колена", "NodeSocketFloat",
+                          default=105.0, min_value=40.0, max_value=250.0,
+                          description="Центр выступа икры — мм от колена вниз. "
+                                       "Держите тем же значением, что в Группе 1.")
     s_calf_bulge = add_input(tree, "Икра_выступ_мм", "NodeSocketFloat",
                               default=12.0, min_value=0.0, max_value=30.0,
                               description="Максимальная добавка радиуса сзади на высоте икры, мм.")
@@ -104,6 +118,22 @@ def build():
     s_crest_depth = add_input(tree, "Гребень_глубина_мм", "NodeSocketFloat",
                                default=6.0, min_value=0.0, max_value=15.0,
                                description="Максимальная глубина подрезки по бокам от гребня, мм.")
+    s_crest_shift = add_input(tree, "Гребень_смещение_град", "NodeSocketFloat",
+                               default=8.0, min_value=0.0, max_value=20.0,
+                               description="Смещение направления гребня от строго переднего "
+                                            "(+Y) в сторону — большеберцовый гребень анатомически "
+                                            "не по центру голени, а слегка медиально. Знак "
+                                            "определяется Стороной_ноги.")
+
+    s_oval = add_input(tree, "Овальность_у_лодыжки_мм", "NodeSocketFloat",
+                        default=4.0, min_value=-15.0, max_value=15.0,
+                        description="Лёгкая овальность сечения у лодыжки: положительное "
+                                     "значение = шире медиально-латерально (X), уже "
+                                     "спереди-назад (Y) — типично для зоны над лодыжками.")
+    s_oval_len = add_input(tree, "Овальность_протяжённость_доля", "NodeSocketFloat",
+                            default=0.25, min_value=0.05, max_value=0.5,
+                            description="На какой доле длины (от лодыжки вверх) овальность "
+                                         "плавно сходит на нет.")
 
     s_res = add_input(tree, "Разрешение_кольца", "NodeSocketInt",
                        default=32, min_value=12, max_value=64,
@@ -201,16 +231,32 @@ def build():
 
     # ------------------------------------------------------------------
     # СЕКЦИЯ 5: базовый радиус R_base(T) — интерполяция по 2 обхватам
+    # ПРАВКА: Точка1/Точка2 заданы в мм от колена (не в долях) и точка
+    # 1 не обязана быть НИЖЕ точки 2 — группа сама сортирует T1/T2, что
+    # чинит баг "обхват в нижней точке иногда срабатывает сверху"
+    # (раньше Map Range молча ломался, если From Min > From Max).
     # ------------------------------------------------------------------
+    n210f = add_node(tree, "ShaderNodeMath", "2.10f",
+                      "доля1_от_колена = Точка1_мм / Длина (зажато 0..1)",
+                      -260, -430, operation='DIVIDE', use_clamp=True)
+    tree.links.new(GI("Точка1_мм_от_колена"), in_sock(n210f, "Value"))
+    tree.links.new(GI("Длина_сегмента_мм"), in_sock(n210f, "Value_001"))
+
     n210 = add_node(tree, "ShaderNodeMath", "2.10",
-                     "T1 = 1 - Точка1_доля_от_колена", 0, -500, operation='SUBTRACT')
+                     "T1 = 1 - доля1_от_колена", 0, -500, operation='SUBTRACT')
     in_sock(n210, "Value").default_value = 1.0
-    tree.links.new(GI("Точка1_доля_от_колена"), in_sock(n210, "Value_001"))
+    link(tree, n210f, "Value", n210, "Value_001")
+
+    n211f = add_node(tree, "ShaderNodeMath", "2.11f",
+                      "доля2_от_колена = Точка2_мм / Длина (зажато 0..1)",
+                      -260, -600, operation='DIVIDE', use_clamp=True)
+    tree.links.new(GI("Точка2_мм_от_колена"), in_sock(n211f, "Value"))
+    tree.links.new(GI("Длина_сегмента_мм"), in_sock(n211f, "Value_001"))
 
     n211 = add_node(tree, "ShaderNodeMath", "2.11",
-                     "T2 = 1 - Точка2_доля_от_колена", 0, -650, operation='SUBTRACT')
+                     "T2 = 1 - доля2_от_колена", 0, -650, operation='SUBTRACT')
     in_sock(n211, "Value").default_value = 1.0
-    tree.links.new(GI("Точка2_доля_от_колена"), in_sock(n211, "Value_001"))
+    link(tree, n211f, "Value", n211, "Value_001")
 
     n212 = add_node(tree, "ShaderNodeMath", "2.12",
                      "R1 = Обхват1 / 2пи", 260, -500, operation='DIVIDE')
@@ -222,24 +268,48 @@ def build():
     tree.links.new(GI("Обхват_Точка2_мм"), in_sock(n213, "Value"))
     in_sock(n213, "Value_001").default_value = TWO_PI
 
+    n213cmp = add_node(tree, "FunctionNodeCompare", "2.13cmp",
+                        "T1 < T2 ? (какая точка ниже)", 560, -430,
+                        data_type='FLOAT', operation='LESS_THAN')
+    link(tree, n210, "Value", n213cmp, "A")
+    link(tree, n211, "Value", n213cmp, "B")
+
+    def sorter(num, label, x, y, val_if_1_lower, val_if_2_lower):
+        sw = add_node(tree, "GeometryNodeSwitch", num, label, x, y, input_type='FLOAT')
+        link(tree, n213cmp, "Result", sw, "Switch")
+        tree.links.new(val_if_2_lower, in_sock(sw, "False"))
+        tree.links.new(val_if_1_lower, in_sock(sw, "True"))
+        return sw
+
+    n213tlo = sorter("2.13tlo", "T_low = T1<T2 ? T1 : T2", 820, -350,
+                      n210.outputs["Value"], n211.outputs["Value"])
+    n213thi = sorter("2.13thi", "T_high = T1<T2 ? T2 : T1", 820, -500,
+                      n211.outputs["Value"], n210.outputs["Value"])
+    n213rlo = sorter("2.13rlo", "R_low = T1<T2 ? R1 : R2", 820, -650,
+                      n212.outputs["Value"], n213.outputs["Value"])
+    n213rhi = sorter("2.13rhi", "R_high = T1<T2 ? R2 : R1", 820, -800,
+                      n213.outputs["Value"], n212.outputs["Value"])
+
     n214 = named_attr(tree, "2.14", "Читаем 'ring_T' (после Realize)",
                        1560, -300, "ring_T", 'FLOAT')
 
     n215 = add_node(tree, "ShaderNodeMapRange", "2.15",
-                     "R_base(T): линейная интерполяция R1..R2", 560, -570,
+                     "R_base(T): линейная интерполяция R_low..R_high", 1120, -570,
                      data_type='FLOAT', clamp=True)
     link(tree, n214, "Attribute_Float", n215, "Value")
-    link(tree, n210, "Value", n215, "From Min")
-    link(tree, n211, "Value", n215, "From Max")
-    link(tree, n212, "Value", n215, "To Min")
-    link(tree, n213, "Value", n215, "To Max")
+    tree.links.new(out_sock(n213tlo, "Output"), in_sock(n215, "From Min"))
+    tree.links.new(out_sock(n213thi, "Output"), in_sock(n215, "From Max"))
+    tree.links.new(out_sock(n213rlo, "Output"), in_sock(n215, "To Min"))
+    tree.links.new(out_sock(n213rhi, "Output"), in_sock(n215, "To Max"))
 
     frame5 = make_frame(
-        tree, "5. БАЗОВЫЙ РАДИУС R_base(T) — интерполяция между 2 обхватами",
-        [n210, n211, n212, n213, n214, n215])
+        tree, "5. БАЗОВЫЙ РАДИУС R_base(T) — интерполяция между 2 обхватами "
+        "(сортировка T1/T2 чинит баг 'сверху вместо снизу')",
+        [n210f, n210, n211f, n211, n212, n213, n213cmp,
+         n213tlo, n213thi, n213rlo, n213rhi, n214, n215])
 
     # ------------------------------------------------------------------
-    # СЕКЦИЯ 6: гребень большеберцовой кости (перед, +Y)
+    # СЕКЦИЯ 5b: dir -> X/Y (используется гребнем, икрой и овальностью)
     # ------------------------------------------------------------------
     n216 = named_attr(tree, "2.16", "Читаем 'dir' (после Realize)",
                        1560, 250, "dir", 'FLOAT_VECTOR')
@@ -248,24 +318,66 @@ def build():
                      "Разбор dir -> X (лат.), Y (перед/зад)", 1820, 250)
     link(tree, n216, "Attribute_Vector", n217, "Vector")
 
+    frame5b = make_frame(tree, "5b. dir -> X/Y (общее для секций 6,7,7b)", [n216, n217])
+
+    # ------------------------------------------------------------------
+    # СЕКЦИЯ 6: гребень большеберцовой кости (перед, со смещением по
+    # стороне ноги) — подрезка боков от гребня, сглаженная у шва
+    # ------------------------------------------------------------------
+    n219a = add_node(tree, "ShaderNodeMath", "2.19a",
+                      "Гребень_смещение -> рад", 1560, 950, operation='RADIANS')
+    tree.links.new(GI("Гребень_смещение_град"), in_sock(n219a, "Value"))
+
+    n219b = add_node(tree, "ShaderNodeMath", "2.19b",
+                      "* Сторона_ноги (знак смещения)", 1820, 950, operation='MULTIPLY')
+    link(tree, n219a, "Value", n219b, "Value")
+    tree.links.new(GI("Сторона_ноги"), in_sock(n219b, "Value_001"))
+
+    n219c = add_node(tree, "ShaderNodeCombineXYZ", "2.19c",
+                      "Euler(Z=смещение)", 2080, 950)
+    link(tree, n219b, "Value", n219c, "Z")
+
+    n219d = add_node(tree, "FunctionNodeEulerToRotation", "2.19d",
+                      "Euler -> Rotation", 2340, 950)
+    link(tree, n219c, "Vector", n219d, "Euler")
+
+    n219e = add_node(tree, "FunctionNodeInputVector", "2.19e",
+                      "(0,1,0) — 'строго вперёд'", 2080, 780, vector=(0.0, 1.0, 0.0))
+
+    n219f = add_node(tree, "FunctionNodeRotateVector", "2.19f",
+                      "front_ref = поворот (0,1,0) на смещение", 2600, 900)
+    link(tree, n219e, "Vector", n219f, "Vector")
+    link(tree, n219d, "Rotation", n219f, "Rotation")
+
+    n219g = add_node(tree, "ShaderNodeVectorMath", "2.19g",
+                      "dot(dir, front_ref)", 2860, 700, operation='DOT_PRODUCT')
+    link(tree, n216, "Attribute_Vector", n219g, "Vector")
+    link(tree, n219f, "Vector", n219g, "Vector_001")
+
     n218 = add_node(tree, "ShaderNodeMath", "2.18",
-                     "w_front = max(dir.Y, 0)", 2080, 700, operation='MAXIMUM')
-    link(tree, n217, "Y", n218, "Value")
+                     "w_front = max(dot, 0)", 3120, 700, operation='MAXIMUM')
+    link(tree, n219g, "Value", n218, "Value")
     in_sock(n218, "Value_001").default_value = 0.0
 
+    n218sq = add_node(tree, "ShaderNodeMath", "2.18sq",
+                       "w_front_смягчённый = w_front^2 (убирает излом на шве)",
+                       3380, 700, operation='MULTIPLY')
+    link(tree, n218, "Value", n218sq, "Value")
+    link(tree, n218, "Value", n218sq, "Value_001")
+
     n219 = add_node(tree, "ShaderNodeMath", "2.19",
-                     "(1 - w_front)", 2340, 700, operation='SUBTRACT')
+                     "(1 - w_front_смягчённый)", 3640, 700, operation='SUBTRACT')
     in_sock(n219, "Value").default_value = 1.0
-    link(tree, n218, "Value", n219, "Value_001")
+    link(tree, n218sq, "Value", n219, "Value_001")
 
     n220 = add_node(tree, "ShaderNodeMath", "2.20",
-                     "w_front * (1-w_front)", 2600, 700, operation='MULTIPLY')
-    link(tree, n218, "Value", n220, "Value")
+                     "w_front_см * (1-w_front_см)", 3900, 700, operation='MULTIPLY')
+    link(tree, n218sq, "Value", n220, "Value")
     link(tree, n219, "Value", n220, "Value_001")
 
     n221 = add_node(tree, "ShaderNodeMath", "2.21",
                      "crest_indent = *4 (нормировка пика в 1.0)",
-                     2860, 700, operation='MULTIPLY')
+                     4160, 700, operation='MULTIPLY')
     link(tree, n220, "Value", n221, "Value")
     in_sock(n221, "Value_001").default_value = 4.0
 
@@ -284,22 +396,23 @@ def build():
 
     n224 = add_node(tree, "ShaderNodeMath", "2.24",
                      "crest_raw = depth(T) * crest_indent",
-                     3120, 600, operation='MULTIPLY')
+                     4420, 600, operation='MULTIPLY')
     link(tree, n223, "Value", n224, "Value")
     link(tree, n221, "Value", n224, "Value_001")
 
     n225 = add_node(tree, "ShaderNodeMath", "2.25",
                      "term_crest = -crest_raw (подрезка = минус)",
-                     3380, 600, operation='MULTIPLY')
+                     4680, 600, operation='MULTIPLY')
     link(tree, n224, "Value", n225, "Value")
     in_sock(n225, "Value_001").default_value = -1.0
 
     frame6 = make_frame(
-        tree, "6. ГРЕБЕНЬ БОЛЬШЕБЕРЦОВОЙ КОСТИ (перед, +Y): подрезка боков от гребня",
-        [n218, n219, n220, n221, n222, n223, n224, n225])
+        tree, "6. ГРЕБЕНЬ БОЛЬШЕБЕРЦОВОЙ КОСТИ: смещение по стороне ноги + сглаженный излом",
+        [n219a, n219b, n219c, n219d, n219e, n219f, n219g,
+         n218, n218sq, n219, n220, n221, n222, n223, n224, n225])
 
     # ------------------------------------------------------------------
-    # СЕКЦИЯ 7: икроножная мышца (зад, -Y)
+    # СЕКЦИЯ 7: икроножная мышца (зад, -Y), сглаженная у шва и по высоте
     # ------------------------------------------------------------------
     n226 = add_node(tree, "ShaderNodeMath", "2.26",
                      "-dir.Y", 2080, 150, operation='MULTIPLY')
@@ -311,10 +424,22 @@ def build():
     link(tree, n226, "Value", n227, "Value")
     in_sock(n227, "Value_001").default_value = 0.0
 
+    n227sq = add_node(tree, "ShaderNodeMath", "2.27sq",
+                       "w_back_смягчённый = w_back^2 (убирает излом на шве)",
+                       2600, 150, operation='MULTIPLY')
+    link(tree, n227, "Value", n227sq, "Value")
+    link(tree, n227, "Value", n227sq, "Value_001")
+
+    n228f = add_node(tree, "ShaderNodeMath", "2.28f",
+                      "доля_икры_от_колена = мм / Длина (зажато 0..1)",
+                      -260, -50, operation='DIVIDE', use_clamp=True)
+    tree.links.new(GI("Высота_икры_мм_от_колена"), in_sock(n228f, "Value"))
+    tree.links.new(GI("Длина_сегмента_мм"), in_sock(n228f, "Value_001"))
+
     n228 = add_node(tree, "ShaderNodeMath", "2.28",
-                     "T_икра = 1 - Высота_икры_доля_от_колена", 0, -50, operation='SUBTRACT')
+                     "T_икра = 1 - доля_икры_от_колена", 0, -50, operation='SUBTRACT')
     in_sock(n228, "Value").default_value = 1.0
-    tree.links.new(GI("Высота_икры_доля_от_колена"), in_sock(n228, "Value_001"))
+    link(tree, n228f, "Value", n228, "Value_001")
 
     n229 = add_node(tree, "ShaderNodeMath", "2.29",
                      "diff = T - T_икра", 1820, -50, operation='SUBTRACT')
@@ -326,43 +451,134 @@ def build():
     link(tree, n229, "Value", n230, "Value")
 
     n231 = add_node(tree, "ShaderNodeMath", "2.31",
-                     "|diff| / Икра_ширина_доля", 2340, -50, operation='DIVIDE')
+                     "норм. = |diff| / Икра_ширина_доля", 2340, -50, operation='DIVIDE')
     link(tree, n230, "Value", n231, "Value")
     tree.links.new(GI("Икра_ширина_доля"), in_sock(n231, "Value_001"))
 
+    n231b = add_node(tree, "ShaderNodeMath", "2.31b",
+                      "min(норм., 1) — за пределами ширины falloff=0",
+                      2600, -50, operation='MINIMUM')
+    link(tree, n231, "Value", n231b, "Value")
+    in_sock(n231b, "Value_001").default_value = 1.0
+
+    n231c = add_node(tree, "ShaderNodeMath", "2.31c",
+                      "* пи", 2860, -50, operation='MULTIPLY')
+    link(tree, n231b, "Value", n231c, "Value")
+    in_sock(n231c, "Value_001").default_value = math.pi
+
+    n231d = add_node(tree, "ShaderNodeMath", "2.31d",
+                      "cos(...)", 3120, -50, operation='COSINE')
+    link(tree, n231c, "Value", n231d, "Value")
+
+    n231e = add_node(tree, "ShaderNodeMath", "2.31e",
+                      "+1", 3380, -50, operation='ADD')
+    link(tree, n231d, "Value", n231e, "Value")
+    in_sock(n231e, "Value_001").default_value = 1.0
+
     n232 = add_node(tree, "ShaderNodeMath", "2.32",
-                     "falloff(T) = clamp(1 - норм., 0, 1)", 2600, -50,
-                     operation='SUBTRACT')
-    in_sock(n232, "Value").default_value = 1.0
-    link(tree, n231, "Value", n232, "Value_001")
-    n232.use_clamp = True
+                     "falloff(T) = 0.5*(cos(норм.*пи)+1) — гладкий колокол "
+                     "(без излома в пике и на границе)", 3640, -50, operation='MULTIPLY')
+    link(tree, n231e, "Value", n232, "Value")
+    in_sock(n232, "Value_001").default_value = 0.5
 
     n233 = add_node(tree, "ShaderNodeMath", "2.33",
-                     "Икра_выступ_мм * w_back", 2600, 150, operation='MULTIPLY')
+                     "Икра_выступ_мм * w_back_смягчённый", 2600, 150, operation='MULTIPLY')
     tree.links.new(GI("Икра_выступ_мм"), in_sock(n233, "Value"))
-    link(tree, n227, "Value", n233, "Value_001")
+    link(tree, n227sq, "Value", n233, "Value_001")
 
     n234 = add_node(tree, "ShaderNodeMath", "2.34",
-                     "term_calf = (Икра_выступ*w_back) * falloff(T)",
-                     2860, 100, operation='MULTIPLY')
+                     "term_calf = (Икра_выступ*w_back_см) * falloff(T)",
+                     3900, 100, operation='MULTIPLY')
     link(tree, n233, "Value", n234, "Value")
     link(tree, n232, "Value", n234, "Value_001")
 
     frame7 = make_frame(
-        tree, "7. ИКРОНОЖНАЯ МЫШЦА (зад, -Y): выступ с затуханием по высоте",
-        [n226, n227, n228, n229, n230, n231, n232, n233, n234])
+        tree, "7. ИКРОНОЖНАЯ МЫШЦА: гладкий колокол по высоте + сглаженный излом на шве",
+        [n226, n227, n227sq, n228f, n228, n229, n230, n231, n231b, n231c,
+         n231d, n231e, n232, n233, n234])
+
+    # ------------------------------------------------------------------
+    # СЕКЦИЯ 7b: лёгкая овальность у лодыжки
+    # oval_term = (dir.x² - dir.y²) * Овальность_мм * falloff_у_лодыжки(T)
+    # ------------------------------------------------------------------
+    n217x2 = add_node(tree, "ShaderNodeMath", "2.17x2",
+                       "dir.X^2", 2080, -300, operation='MULTIPLY')
+    link(tree, n217, "X", n217x2, "Value")
+    link(tree, n217, "X", n217x2, "Value_001")
+
+    n217y2 = add_node(tree, "ShaderNodeMath", "2.17y2",
+                       "dir.Y^2", 2080, -430, operation='MULTIPLY')
+    link(tree, n217, "Y", n217y2, "Value")
+    link(tree, n217, "Y", n217y2, "Value_001")
+
+    n217d = add_node(tree, "ShaderNodeMath", "2.17d",
+                      "oval_dir = dir.X^2 - dir.Y^2 (+1 бок, -1 перед/зад)",
+                      2340, -370, operation='SUBTRACT')
+    link(tree, n217x2, "Value", n217d, "Value")
+    link(tree, n217y2, "Value", n217d, "Value_001")
+
+    n217e = add_node(tree, "ShaderNodeMath", "2.17e",
+                      "норм. = ring_T / Овальность_протяжённость_доля",
+                      2340, -550, operation='DIVIDE')
+    link(tree, n214, "Attribute_Float", n217e, "Value")
+    tree.links.new(GI("Овальность_протяжённость_доля"), in_sock(n217e, "Value_001"))
+
+    n217f = add_node(tree, "ShaderNodeMath", "2.17f",
+                      "min(норм., 1)", 2600, -550, operation='MINIMUM')
+    link(tree, n217e, "Value", n217f, "Value")
+    in_sock(n217f, "Value_001").default_value = 1.0
+
+    n217g = add_node(tree, "ShaderNodeMath", "2.17g",
+                      "* пи", 2860, -550, operation='MULTIPLY')
+    link(tree, n217f, "Value", n217g, "Value")
+    in_sock(n217g, "Value_001").default_value = math.pi
+
+    n217h = add_node(tree, "ShaderNodeMath", "2.17h",
+                      "cos(...)", 3120, -550, operation='COSINE')
+    link(tree, n217g, "Value", n217h, "Value")
+
+    n217i = add_node(tree, "ShaderNodeMath", "2.17i",
+                      "+1", 3380, -550, operation='ADD')
+    link(tree, n217h, "Value", n217i, "Value")
+    in_sock(n217i, "Value_001").default_value = 1.0
+
+    n217j = add_node(tree, "ShaderNodeMath", "2.17j",
+                      "falloff_у_лодыжки(T) = 0.5*(cos(норм.*пи)+1): "
+                      "1 у лодыжки, гладко к 0 выше", 3640, -550, operation='MULTIPLY')
+    link(tree, n217i, "Value", n217j, "Value")
+    in_sock(n217j, "Value_001").default_value = 0.5
+
+    n217k = add_node(tree, "ShaderNodeMath", "2.17k",
+                      "oval_dir * Овальность_у_лодыжки_мм", 3900, -400, operation='MULTIPLY')
+    link(tree, n217d, "Value", n217k, "Value")
+    tree.links.new(GI("Овальность_у_лодыжки_мм"), in_sock(n217k, "Value_001"))
+
+    n217l = add_node(tree, "ShaderNodeMath", "2.17l",
+                      "term_oval = (oval_dir*Овальность_мм) * falloff_у_лодыжки(T)",
+                      4160, -450, operation='MULTIPLY')
+    link(tree, n217k, "Value", n217l, "Value")
+    link(tree, n217j, "Value", n217l, "Value_001")
+
+    frame7b = make_frame(
+        tree, "7b. ОВАЛЬНОСТЬ У ЛОДЫЖКИ (гладкий колокол от T=0 вверх)",
+        [n217x2, n217y2, n217d, n217e, n217f, n217g, n217h, n217i, n217j, n217k, n217l])
 
     # ------------------------------------------------------------------
     # СЕКЦИЯ 8: итоговый радиус и позиция
     # ------------------------------------------------------------------
     n235 = add_node(tree, "ShaderNodeMath", "2.35",
-                     "R_mid = R_base + term_crest", 3640, 400, operation='ADD')
+                     "R_mid = R_base + term_crest", 4680, 400, operation='ADD')
     link(tree, n215, "Result", n235, "Value")
     link(tree, n225, "Value", n235, "Value_001")
 
+    n235o = add_node(tree, "ShaderNodeMath", "2.35o",
+                      "R_mid2 = R_mid + term_oval", 4900, 350, operation='ADD')
+    link(tree, n235, "Value", n235o, "Value")
+    link(tree, n217l, "Value", n235o, "Value_001")
+
     n236 = add_node(tree, "ShaderNodeMath", "2.36",
-                     "R_total = R_mid + term_calf", 3900, 300, operation='ADD')
-    link(tree, n235, "Value", n236, "Value")
+                     "R_total = R_mid2 + term_calf", 5120, 300, operation='ADD')
+    link(tree, n235o, "Value", n236, "Value")
     link(tree, n234, "Value", n236, "Value_001")
 
     n237 = named_attr(tree, "2.37", "Читаем 'ring_center'",
@@ -539,6 +755,12 @@ def build_demo_object(tree, axis_tree):
     g2.label = "M.2 Группа 2 (Профиль)"
 
     master.links.new(g1.outputs["Ось_кривая"], g2.inputs["Ось_кривая"])
+    # Длина и сторона ноги должны совпадать между Группой 1 и Группой 2 -
+    # тянем их напрямую из выходов Группы 1, чтобы не дублировать ввод и
+    # не допустить рассинхронизации (баг "гребень не туда" при разных
+    # значениях Сторона_ноги в двух группах).
+    master.links.new(g1.outputs["Факт_длина_дуги_мм"], g2.inputs["Длина_сегмента_мм"])
+    master.links.new(g1.outputs["Сторона_ноги"], g2.inputs["Сторона_ноги"])
     master.links.new(g2.outputs["VIS_Кольца"], gout.inputs["Geometry"])
 
     return obj, mod, master, g1, g2
