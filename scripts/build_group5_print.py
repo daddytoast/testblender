@@ -212,6 +212,20 @@ def build_print(cut_tree):
     add_input(tree, "Наклон_шва_град", "NodeSocketFloat", default=12.0, min_value=0.0, max_value=25.0,
               description="Наклон плоскости разреза от горизонтали - делает стык менее заметным "
                            "и увеличивает площадь склейки.")
+    add_input(tree, "Паз_гребня_вкл", "NodeSocketFloat", default=1.0, min_value=0.0, max_value=1.0,
+              description="1 = добавить паз-шип на стыке ПЕРЕДНЕЙ детали, в районе гребня "
+                           "большеберцовой кости (шип снизу входит в паз сверху - позиционирует "
+                           "и прячет линию стыка). 0 = отключить (только Перед; на Зад не влияет - "
+                           "гребень есть только спереди).")
+    add_input(tree, "Паз_гребня_ширина_мм", "NodeSocketFloat", default=16.0,
+              min_value=6.0, max_value=30.0, description="Ширина шипа (вбок, по X).")
+    add_input(tree, "Паз_гребня_глубина_мм", "NodeSocketFloat", default=8.0,
+              min_value=4.0, max_value=20.0, description="Глубина шипа (перед-зад, по Y).")
+    add_input(tree, "Паз_гребня_выступ_мм", "NodeSocketFloat", default=4.0,
+              min_value=1.5, max_value=10.0, description="Насколько шип выступает от плоскости "
+                           "разреза в верхнюю деталь (и на столько же паз врезается в неё).")
+    add_input(tree, "Паз_гребня_зазор_мм", "NodeSocketFloat", default=0.3,
+              min_value=0.0, max_value=1.0, description="Зазор паза относительно шипа (посадка).")
 
     add_output(tree, "VIS_Вместе", "NodeSocketGeometry")
     add_output(tree, "Перед_Низ", "NodeSocketGeometry")
@@ -315,18 +329,143 @@ def build_print(cut_tree):
     frame3 = make_frame(tree, "3. РАЗРЕЗ ПЕРЕД И ЗАД (Group: NK.5a_Разрез_с_крышкой)", [cutF, cutB])
 
     # ------------------------------------------------------------------
+    # 3b. ПАЗ-ШИП НА СТЫКЕ У ГРЕБНЯ (только Перед - гребень большеберцовой
+    # кости есть только спереди). Находим РЕАЛЬНУЮ точку на поверхности
+    # Перед возле гребня на высоте разреза через Geometry Proximity
+    # (зондирующая точка далеко впереди оси - гарантированно снаружи,
+    # Proximity привяжется к настоящей передней поверхности), строим
+    # прямоугольный шип поперёк плоскости разреза (наклонённой вместе с
+    # ней), объединяем с Низ (снаружи от плоскости), вычитаем чуть
+    # больший паз из Верх - швов почти не видно, и деталь сама
+    # позиционируется при сборке.
+    # ------------------------------------------------------------------
+    probe_pt = add_node(tree, "ShaderNodeCombineXYZ", "5.30", "зонд = (0, 150мм, высота_разреза) "
+                         "- заведомо снаружи спереди", 0, -350)
+    in_sock(probe_pt, "Y").default_value = 150.0
+    link(tree, n10, "Value", probe_pt, "Z")
+
+    prox = add_node(tree, "GeometryNodeProximity", "5.31", "ближайшая точка Перед к зонду",
+                     260, -350, target_element='FACES')
+    tree.links.new(GI("Перед"), in_sock(prox, "Target"))
+    link(tree, probe_pt, "Vector", prox, "Source Position")
+
+    tongue_box = add_node(tree, "GeometryNodeMeshCube", "5.32", "шип (куб)", 0, -550)
+    tongue_size = add_node(tree, "ShaderNodeCombineXYZ", "5.32s",
+                            "размер = (ширина, глубина, 2*выступ+запас в Низ)", 260, -550)
+    tree.links.new(GI("Паз_гребня_ширина_мм"), in_sock(tongue_size, "X"))
+    tree.links.new(GI("Паз_гребня_глубина_мм"), in_sock(tongue_size, "Y"))
+    tongue_h = add_node(tree, "ShaderNodeMath", "5.32h", "2*выступ + 6мм (запас в Низ для сварки)",
+                         0, -700, operation='MULTIPLY')
+    tree.links.new(GI("Паз_гребня_выступ_мм"), in_sock(tongue_h, "Value"))
+    in_sock(tongue_h, "Value_001").default_value = 2.0
+    tongue_h2 = add_node(tree, "ShaderNodeMath", "5.32h2", "+6мм", 130, -700, operation='ADD')
+    link(tree, tongue_h, "Value", tongue_h2, "Value")
+    in_sock(tongue_h2, "Value_001").default_value = 6.0
+    link(tree, tongue_h2, "Value", tongue_size, "Z")
+    in_sock(tongue_box, "Size").default_value = (1.0, 1.0, 1.0)
+    tongue_sc = add_node(tree, "GeometryNodeTransform", "5.32t", "масштаб шипа", 520, -550)
+    link(tree, tongue_box, "Mesh", tongue_sc, "Geometry")
+    link(tree, tongue_size, "Vector", tongue_sc, "Scale")
+
+    # центр шипа: точка на поверхности гребня, смещённая ВДОЛЬ НОРМАЛИ
+    # РАЗРЕЗА на (выступ - 3мм) - т.е. большая часть куба уходит В Низ
+    # (запас на сварку), а наружу (в Верх) торчит ровно "выступ".
+    tongue_off_len = add_node(tree, "ShaderNodeMath", "5.32o", "выступ - 3мм",
+                               0, -850, operation='SUBTRACT')
+    tree.links.new(GI("Паз_гребня_выступ_мм"), in_sock(tongue_off_len, "Value"))
+    in_sock(tongue_off_len, "Value_001").default_value = 3.0
+    tongue_off = add_node(tree, "ShaderNodeVectorMath", "5.32ov", "нормаль_разреза*(выступ-3мм)",
+                           260, -850, operation='SCALE')
+    link(tree, n14, "Vector", tongue_off, "Vector")
+    link(tree, tongue_off_len, "Value", tongue_off, "Scale")
+    tongue_center = add_node(tree, "ShaderNodeVectorMath", "5.32c", "центр = точка_гребня + смещение",
+                              520, -800, operation='ADD')
+    tree.links.new(out_sock(prox, "Position"), in_sock(tongue_center, "Vector"))
+    link(tree, tongue_off, "Vector", tongue_center, "Vector_001")
+
+    tongue_xf = add_node(tree, "GeometryNodeTransform", "5.33", "шип на место (поворот как у разреза)",
+                          780, -550)
+    link(tree, tongue_sc, "Geometry", tongue_xf, "Geometry")
+    link(tree, n13e, "Rotation", tongue_xf, "Rotation")
+    link(tree, tongue_center, "Vector", tongue_xf, "Translation")
+
+    groove_size = add_node(tree, "ShaderNodeVectorMath", "5.34", "паз = шип + Паз_гребня_зазор*2 "
+                            "(по X,Y; Z оставляем - паз той же глубины выемки)",
+                            0, -1000, operation='ADD')
+    link(tree, tongue_size, "Vector", groove_size, "Vector")
+    gap2 = add_node(tree, "ShaderNodeVectorMath", "5.34g", "(зазор*2, зазор*2, 0)", 0, -1150,
+                     operation='SCALE')
+    gap2v = add_node(tree, "ShaderNodeCombineXYZ", "5.34gv", "(1,1,0)", -260, -1150)
+    in_sock(gap2v, "X").default_value = 1.0
+    in_sock(gap2v, "Y").default_value = 1.0
+    link(tree, gap2v, "Vector", gap2, "Vector")
+    gap2s = add_node(tree, "ShaderNodeMath", "5.34gs", "зазор*2", -260, -1000, operation='MULTIPLY')
+    tree.links.new(GI("Паз_гребня_зазор_мм"), in_sock(gap2s, "Value"))
+    in_sock(gap2s, "Value_001").default_value = 2.0
+    link(tree, gap2s, "Value", gap2, "Scale")
+    link(tree, gap2, "Vector", groove_size, "Vector_001")
+
+    groove_box = add_node(tree, "GeometryNodeMeshCube", "5.35", "паз (куб)", 260, -1000)
+    in_sock(groove_box, "Size").default_value = (1.0, 1.0, 1.0)
+    groove_sc = add_node(tree, "GeometryNodeTransform", "5.35t", "масштаб паза", 520, -1000)
+    link(tree, groove_box, "Mesh", groove_sc, "Geometry")
+    link(tree, groove_size, "Vector", groove_sc, "Scale")
+    groove_xf = add_node(tree, "GeometryNodeTransform", "5.36", "паз на место (тот же центр, что шип)",
+                          780, -1000)
+    link(tree, groove_sc, "Geometry", groove_xf, "Geometry")
+    link(tree, n13e, "Rotation", groove_xf, "Rotation")
+    link(tree, tongue_center, "Vector", groove_xf, "Translation")
+
+    joint_on = add_node(tree, "FunctionNodeCompare", "5.37", "Паз_гребня_вкл > 0.5 И нужен разрез?",
+                         1040, -200, data_type='FLOAT', operation='GREATER_THAN')
+    tree.links.new(GI("Паз_гребня_вкл"), in_sock(joint_on, "A"))
+    in_sock(joint_on, "B").default_value = 0.5
+    joint_on2 = add_node(tree, "FunctionNodeBooleanMath", "5.37b", "И нужен разрез (иначе нет "
+                          "второй детали, шип некуда ставить)", 1040, -100, operation='AND')
+    link(tree, joint_on, "Result", joint_on2, "Boolean")
+    link(tree, n09, "Result", joint_on2, "Boolean_001")
+
+    empty_g = add_node(tree, "GeometryNodeMeshCube", "5.37e", "пусто (паз выкл.)", 780, -250)
+    in_sock(empty_g, "Size").default_value = (0.0, 0.0, 0.0)
+    tongue_sw = add_node(tree, "GeometryNodeSwitch", "5.38", "шип вкл?", 1040, -400, input_type='GEOMETRY')
+    link(tree, joint_on2, "Boolean", tongue_sw, "Switch_001")
+    link(tree, empty_g, "Mesh", tongue_sw, "False_006")
+    link(tree, tongue_xf, "Geometry", tongue_sw, "True_006")
+    groove_sw = add_node(tree, "GeometryNodeSwitch", "5.39", "паз вкл?", 1040, -650, input_type='GEOMETRY')
+    link(tree, joint_on2, "Boolean", groove_sw, "Switch_001")
+    link(tree, empty_g, "Mesh", groove_sw, "False_006")
+    link(tree, groove_xf, "Geometry", groove_sw, "True_006")
+
+    lowF_u = add_node(tree, "GeometryNodeMeshBoolean", "5.40", "Низ(Перед) + шип", 1300, -420,
+                       operation='UNION')
+    tree.links.new(cutF.outputs["Часть_B"], in_sock(lowF_u, "Mesh 2"))
+    link(tree, tongue_sw, "Output_006", lowF_u, "Mesh 2")
+    highF_d = add_node(tree, "GeometryNodeMeshBoolean", "5.41", "Верх(Перед) - паз", 1300, -650,
+                        operation='DIFFERENCE')
+    tree.links.new(cutF.outputs["Часть_A"], in_sock(highF_d, "Mesh 1"))
+    link(tree, groove_sw, "Output_006", highF_d, "Mesh 2")
+
+    frame3b = make_frame(
+        tree, "3b. ПАЗ-ШИП У ГРЕБНЯ (только Перед): точка гребня через Proximity, "
+        "шип UNION в Низ, паз DIFFERENCE из Верх",
+        [probe_pt, prox, tongue_box, tongue_size, tongue_h, tongue_h2, tongue_sc,
+         tongue_off_len, tongue_off, tongue_center, tongue_xf,
+         groove_size, gap2, gap2v, gap2s, groove_box, groove_sc, groove_xf,
+         joint_on, joint_on2, empty_g, tongue_sw, groove_sw, lowF_u, highF_d])
+
+    # ------------------------------------------------------------------
     # 4. ВЫБОР: если сегмент не нужен - взять целую деталь / пусто
     # ------------------------------------------------------------------
-    swFL = add_node(tree, "GeometryNodeSwitch", "5.17", "Перед_Низ: разрез?B, иначе целиком",
+    swFL = add_node(tree, "GeometryNodeSwitch", "5.17", "Перед_Низ: разрез?B(+шип), иначе целиком",
                      1150, 350, input_type='GEOMETRY')
     link(tree, n09, "Result", swFL, "Switch_001")  # GEOMETRY -> Switch_001, не Switch! (см. докстринг/докc)
     tree.links.new(GI("Перед"), in_sock(swFL, "False_006"))
-    tree.links.new(cutF.outputs["Часть_B"], in_sock(swFL, "True_006"))
+    link(tree, lowF_u, "Mesh", swFL, "True_006")
 
-    swFH = add_node(tree, "GeometryNodeSwitch", "5.18", "Перед_Верх: разрез?A, иначе пусто",
+    swFH = add_node(tree, "GeometryNodeSwitch", "5.18", "Перед_Верх: разрез?A(-паз), иначе пусто",
                      1150, 200, input_type='GEOMETRY')
     link(tree, n09, "Result", swFH, "Switch_001")  # GEOMETRY -> Switch_001, не Switch! (см. докстринг/докc)
-    tree.links.new(cutF.outputs["Часть_A"], in_sock(swFH, "True_006"))
+    link(tree, highF_d, "Mesh", swFH, "True_006")
     # False_006 не подключаем - остаётся пустая геометрия
 
     swBL = add_node(tree, "GeometryNodeSwitch", "5.19", "Зад_Низ: разрез?B, иначе целиком",
