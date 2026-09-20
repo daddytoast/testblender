@@ -89,6 +89,8 @@ def build_full_master():
     g5 = master.nodes.new("GeometryNodeGroup"); g5.node_tree = print_tree; g5.location = (800, 0)
 
     master.links.new(g1.outputs["Ось_кривая"], g2.inputs["Ось_кривая"])
+    master.links.new(g1.outputs["Факт_длина_дуги_мм"], g2.inputs["Длина_сегмента_мм"])
+    master.links.new(g1.outputs["Сторона_ноги"], g2.inputs["Сторона_ноги"])
     master.links.new(g2.outputs["Профиль_точки"], g3.inputs["Профиль_точки"])
     master.links.new(g2.outputs["Точек_в_кольце"], g3.inputs["Точек_в_кольце"])
     master.links.new(g3.outputs["Перед"], g4.inputs["Перед"])

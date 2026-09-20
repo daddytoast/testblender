@@ -177,6 +177,17 @@ def main():
     results.append(run_case("thin_wall", {
         "Толщина_стенки_мм": 1.2,
     }, out_dir))
+    results.append(run_case("flare_max", {
+        "Расширение_верхней_мм": 15.0,
+        "Расширение_протяжённость_доля": 0.3,
+    }, out_dir))
+    results.append(run_case("joint_max", {
+        "Паз_глубина_мм": 3.0,
+        "Паз_ширина_доля_кольца": 0.2,
+    }, out_dir))
+    results.append(run_case("joint_off", {
+        "Паз_глубина_мм": 0.0,
+    }, out_dir))
 
     print("\n=== ИТОГ ===")
     all_ok = True

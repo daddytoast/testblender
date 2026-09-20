@@ -552,6 +552,25 @@ def build_shell(half_tree):
     add_input(tree, "Толщина_стенки_мм", "NodeSocketFloat", default=2.4,
               min_value=1.2, max_value=4.0,
               description="Толщина стенки накладки, мм (2-3 стенки при сопле 0.4мм для PETG).")
+    add_input(tree, "Расширение_верхней_мм", "NodeSocketFloat", default=3.0,
+              min_value=0.0, max_value=15.0,
+              description="Плавное расширение кольца НАРУЖУ у самого верхнего края (после "
+                           "подрезки) - для более мягкого перехода к приёмной гильзе, мм.")
+    add_input(tree, "Расширение_протяжённость_доля", "NodeSocketFloat", default=0.12,
+              min_value=0.02, max_value=0.4,
+              description="Доля высоты (в T) от верхнего края, на которой расширение плавно "
+                           "сходит на нет вниз.")
+    add_input(tree, "Паз_глубина_мм", "NodeSocketFloat", default=1.2,
+              min_value=0.0, max_value=3.0,
+              description="Глубина 'паза в четверть' на швах перед/зад: на сколько мм "
+                           "локально утончается стенка с одной стороны у каждого шва (перед "
+                           "теряет материал изнутри, зад - снаружи), чтобы половины нахлёстывались "
+                           "друг на друга и держали форму, а линия стыка была менее заметна. "
+                           "Обычно ~половина Толщина_стенки_мм. 0 = паз отключён.")
+    add_input(tree, "Паз_ширина_доля_кольца", "NodeSocketFloat", default=0.06,
+              min_value=0.02, max_value=0.25,
+              description="Ширина зоны паза у каждого шва, доля от числа точек в кольце "
+                           "(Точек_в_кольце).")
 
     add_output(tree, "VIS_Вместе", "NodeSocketGeometry", "Перед+зад соединены, для общего просмотра.")
     add_output(tree, "Перед", "NodeSocketGeometry", "Передняя половина оболочки.")
@@ -608,6 +627,83 @@ def build_shell(half_tree):
                          [n02, n03, n04, n05, n06, n06b, n07])
 
     # ------------------------------------------------------------------
+    # 1b. РАСШИРЕНИЕ ВЕРХНЕЙ ЧАСТИ (плавный переход к гильзе)
+    # falloff(T) = гладкий колокол, 1 у самого верхнего края (T=верх.предел),
+    # 0 ниже по Расширение_протяжённость_доля - та же техника, что и
+    # икра/овальность в Группе 2 (cos-колокол, C1-непрерывно).
+    # ------------------------------------------------------------------
+    n07f1 = add_node(tree, "ShaderNodeMath", "3.07f1", "diff = верх.предел - ring_T",
+                      1300, 850, operation='SUBTRACT')
+    link(tree, n04, "Value", n07f1, "Value")
+    link(tree, n02, "Attribute_Float", n07f1, "Value_001")
+
+    n07f2 = add_node(tree, "ShaderNodeMath", "3.07f2", "diff = max(diff, 0)",
+                      1560, 850, operation='MAXIMUM')
+    link(tree, n07f1, "Value", n07f2, "Value")
+    in_sock(n07f2, "Value_001").default_value = 0.0
+
+    n07f3 = add_node(tree, "ShaderNodeMath", "3.07f3", "норм. = diff / Расширение_протяжённость_доля",
+                      1820, 850, operation='DIVIDE')
+    link(tree, n07f2, "Value", n07f3, "Value")
+    tree.links.new(GI("Расширение_протяжённость_доля"), in_sock(n07f3, "Value_001"))
+
+    n07f4 = add_node(tree, "ShaderNodeMath", "3.07f4", "min(норм., 1)",
+                      2080, 850, operation='MINIMUM')
+    link(tree, n07f3, "Value", n07f4, "Value")
+    in_sock(n07f4, "Value_001").default_value = 1.0
+
+    n07f5 = add_node(tree, "ShaderNodeMath", "3.07f5", "* пи",
+                      2340, 850, operation='MULTIPLY')
+    link(tree, n07f4, "Value", n07f5, "Value")
+    in_sock(n07f5, "Value_001").default_value = 3.14159265358979
+
+    n07f6 = add_node(tree, "ShaderNodeMath", "3.07f6", "cos(...)",
+                      2600, 850, operation='COSINE')
+    link(tree, n07f5, "Value", n07f6, "Value")
+
+    n07f7 = add_node(tree, "ShaderNodeMath", "3.07f7", "+1",
+                      2860, 850, operation='ADD')
+    link(tree, n07f6, "Value", n07f7, "Value")
+    in_sock(n07f7, "Value_001").default_value = 1.0
+
+    n07f8 = add_node(tree, "ShaderNodeMath", "3.07f8",
+                      "falloff_верх(T) = *0.5 (1 у края, гладко к 0 ниже)",
+                      3120, 850, operation='MULTIPLY')
+    link(tree, n07f7, "Value", n07f8, "Value")
+    in_sock(n07f8, "Value_001").default_value = 0.5
+
+    n07f9 = add_node(tree, "ShaderNodeMath", "3.07f9",
+                      "offset_расш = falloff_верх(T) * Расширение_верхней_мм",
+                      3380, 850, operation='MULTIPLY')
+    link(tree, n07f8, "Value", n07f9, "Value")
+    tree.links.new(GI("Расширение_верхней_мм"), in_sock(n07f9, "Value_001"))
+
+    n07fdir = named_attr(tree, "3.07fdir", "Читаем 'dir' (для расширения)", 1300, 700, "dir", 'FLOAT_VECTOR')
+
+    n07fvec = add_node(tree, "ShaderNodeVectorMath", "3.07fvec",
+                        "смещение_расш = dir * offset_расш", 3640, 750, operation='SCALE')
+    link(tree, n07fdir, "Attribute_Vector", n07fvec, "Vector")
+    link(tree, n07f9, "Value", n07fvec, "Scale")
+
+    n07fpos = add_node(tree, "GeometryNodeInputPosition", "3.07fpos",
+                        "Position (после подрезки)", 1300, 550)
+
+    n07fnewpos = add_node(tree, "ShaderNodeVectorMath", "3.07fnewpos",
+                           "новая позиция = позиция + смещение_расш", 3900, 650, operation='ADD')
+    link(tree, n07fpos, "Position", n07fnewpos, "Vector")
+    link(tree, n07fvec, "Vector", n07fnewpos, "Vector_001")
+
+    n07b = add_node(tree, "GeometryNodeSetPosition", "3.07b",
+                     "Записать -> Внешние_точки (расширенные у верха)", 4160, 650)
+    link(tree, n07, "Geometry", n07b, "Geometry")
+    link(tree, n07fnewpos, "Vector", n07b, "Position")
+
+    frame1b = make_frame(
+        tree, "1b. РАСШИРЕНИЕ ВЕРХНЕЙ ЧАСТИ (плавный переход к гильзе, гладкий колокол)",
+        [n07f1, n07f2, n07f3, n07f4, n07f5, n07f6, n07f7, n07f8, n07f9,
+         n07fdir, n07fvec, n07fpos, n07fnewpos, n07b])
+
+    # ------------------------------------------------------------------
     # 2. ЧИСЛО ОСТАВШИХСЯ КОЛЕЦ (N) + ПРОВЕРКА ДЕЛИМОСТИ
     # ------------------------------------------------------------------
     v1a = add_node(tree, "GeometryNodeAttributeDomainSize", "V3.1a",
@@ -637,7 +733,9 @@ def build_shell(half_tree):
                          [v1a, n08, n09, v1b, v1])
 
     # ------------------------------------------------------------------
-    # 3. ВНУТРЕННИЕ ТОЧКИ (смещение внутрь на толщину стенки)
+    # 3. ВНУТРЕННИЕ ТОЧКИ (смещение внутрь на толщину стенки, от РАСШИРЕННОЙ
+    # внешней поверхности n07b - чтобы толщина стенки оставалась постоянной
+    # и после расширения верха)
     # ------------------------------------------------------------------
     n10 = named_attr(tree, "3.10", "Читаем 'dir'", 1600, 350, "dir", 'FLOAT_VECTOR')
 
@@ -646,7 +744,7 @@ def build_shell(half_tree):
     link(tree, n10, "Attribute_Vector", n11, "Vector")
     tree.links.new(GI("Толщина_стенки_мм"), in_sock(n11, "Scale"))
 
-    n12p = add_node(tree, "GeometryNodeInputPosition", "3.12p", "Position (внешняя точка)",
+    n12p = add_node(tree, "GeometryNodeInputPosition", "3.12p", "Position (внешняя точка, расширенная)",
                      1600, 200)
 
     n12 = add_node(tree, "ShaderNodeVectorMath", "3.12",
@@ -655,12 +753,160 @@ def build_shell(half_tree):
     link(tree, n11, "Vector", n12, "Vector_001")
 
     n13 = add_node(tree, "GeometryNodeSetPosition", "3.13",
-                    "Записать -> Внутренние_точки", 2420, 280)
-    link(tree, n07, "Geometry", n13, "Geometry")
+                    "Записать -> Внутренние_точки (номинальные)", 2420, 280)
+    link(tree, n07b, "Geometry", n13, "Geometry")
     link(tree, n12, "Vector", n13, "Position")
 
-    frame3 = make_frame(tree, "3. ВНУТРЕННИЕ ТОЧКИ = ВНЕШНИЕ - dir*ТОЛЩИНА",
+    frame3 = make_frame(tree, "3. ВНУТРЕННИЕ ТОЧКИ = ВНЕШНИЕ(расшир.) - dir*ТОЛЩИНА",
                          [n10, n11, n12p, n12, n13])
+
+    # ------------------------------------------------------------------
+    # 3b. ПАЗ В ЧЕТВЕРТЬ НА ШВАХ ПЕРЕД/ЗАД
+    # У каждого из 2 швов (col=0 и col=M/2) считаем гладкий "колокол"
+    # falloff_паз(col) - 1 точно на шве, 0 за пределами Паз_ширина_доля_кольца.
+    # Перед (male): внешняя точка НЕ меняется, внутренняя точка near шва
+    # смещается НАРУЖУ (толщина стенки локально уменьшается изнутри).
+    # Зад (female): внешняя точка near шва смещается ВНУТРЬ (толщина
+    # уменьшается снаружи), внутренняя не меняется. При сборке "мужской"
+    # выступ Перед нахлёстывает "женский" паз Зад - половины держат форму
+    # друг на друге, а линия стыка визуально менее заметна (не прямой шов).
+    # ------------------------------------------------------------------
+    n3bM = add_node(tree, "ShaderNodeMath", "3.14pre", "M/2 (float, для паза)",
+                     1600, -150, operation='DIVIDE')
+    tree.links.new(GI("Точек_в_кольце"), in_sock(n3bM, "Value"))
+    in_sock(n3bM, "Value_001").default_value = 2.0
+
+    n3bidx = add_node(tree, "GeometryNodeInputIndex", "3b.idx", "index точки (после подрезки)",
+                       1600, -300)
+    n3bcol = add_node(tree, "ShaderNodeMath", "3b.col", "col = index mod Точек_в_кольце",
+                       1860, -300, operation='MODULO')
+    link(tree, n3bidx, "Index", n3bcol, "Value")
+    tree.links.new(GI("Точек_в_кольце"), in_sock(n3bcol, "Value_001"))
+
+    n3bd0a = add_node(tree, "ShaderNodeMath", "3b.d0a", "M - col", 2120, -220, operation='SUBTRACT')
+    tree.links.new(GI("Точек_в_кольце"), in_sock(n3bd0a, "Value"))
+    link(tree, n3bcol, "Value", n3bd0a, "Value_001")
+
+    n3bd0 = add_node(tree, "ShaderNodeMath", "3b.d0", "dist0 = min(col, M-col) (шов col=0, круговой)",
+                      2380, -260, operation='MINIMUM')
+    link(tree, n3bcol, "Value", n3bd0, "Value")
+    link(tree, n3bd0a, "Value", n3bd0, "Value_001")
+
+    n3bd1r = add_node(tree, "ShaderNodeMath", "3b.d1r", "col - M/2", 2120, -400, operation='SUBTRACT')
+    link(tree, n3bcol, "Value", n3bd1r, "Value")
+    link(tree, n3bM, "Value", n3bd1r, "Value_001")
+
+    n3bd1 = add_node(tree, "ShaderNodeMath", "3b.d1", "dist1 = |col - M/2| (шов col=M/2)",
+                      2380, -400, operation='ABSOLUTE')
+    link(tree, n3bd1r, "Value", n3bd1, "Value")
+
+    n3bdist = add_node(tree, "ShaderNodeMath", "3b.dist", "distSeam = min(dist0, dist1)",
+                        2640, -320, operation='MINIMUM')
+    link(tree, n3bd0, "Value", n3bdist, "Value")
+    link(tree, n3bd1, "Value", n3bdist, "Value_001")
+
+    n3bband = add_node(tree, "ShaderNodeMath", "3b.band",
+                        "band = Паз_ширина_доля_кольца * Точек_в_кольце",
+                        2640, -480, operation='MULTIPLY')
+    tree.links.new(GI("Паз_ширина_доля_кольца"), in_sock(n3bband, "Value"))
+    tree.links.new(GI("Точек_в_кольце"), in_sock(n3bband, "Value_001"))
+
+    n3bnorm = add_node(tree, "ShaderNodeMath", "3b.norm", "норм. = distSeam / band",
+                        2900, -400, operation='DIVIDE')
+    link(tree, n3bdist, "Value", n3bnorm, "Value")
+    link(tree, n3bband, "Value", n3bnorm, "Value_001")
+
+    n3bmin = add_node(tree, "ShaderNodeMath", "3b.min", "min(норм., 1)",
+                       3160, -400, operation='MINIMUM')
+    link(tree, n3bnorm, "Value", n3bmin, "Value")
+    in_sock(n3bmin, "Value_001").default_value = 1.0
+
+    n3bpi = add_node(tree, "ShaderNodeMath", "3b.pi", "* пи", 3420, -400, operation='MULTIPLY')
+    link(tree, n3bmin, "Value", n3bpi, "Value")
+    in_sock(n3bpi, "Value_001").default_value = 3.14159265358979
+
+    n3bcos = add_node(tree, "ShaderNodeMath", "3b.cos", "cos(...)", 3680, -400, operation='COSINE')
+    link(tree, n3bpi, "Value", n3bcos, "Value")
+
+    n3badd1 = add_node(tree, "ShaderNodeMath", "3b.add1", "+1", 3940, -400, operation='ADD')
+    link(tree, n3bcos, "Value", n3badd1, "Value")
+    in_sock(n3badd1, "Value_001").default_value = 1.0
+
+    n3bfall = add_node(tree, "ShaderNodeMath", "3b.fall",
+                        "falloff_паз(col) = *0.5 (1 на шве, гладко к 0)",
+                        4200, -400, operation='MULTIPLY')
+    link(tree, n3badd1, "Value", n3bfall, "Value")
+    in_sock(n3bfall, "Value_001").default_value = 0.5
+
+    # Защита от самопересечения: глубина паза не должна превышать
+    # толщину стенки (иначе "мужской" выступ вылезет за внешнюю
+    # поверхность) - зажимаем запасом 80% толщины.
+    n3bwallcap = add_node(tree, "ShaderNodeMath", "3b.wallcap",
+                           "предел = Толщина_стенки_мм * 0.8", 3940, -600, operation='MULTIPLY')
+    tree.links.new(GI("Толщина_стенки_мм"), in_sock(n3bwallcap, "Value"))
+    in_sock(n3bwallcap, "Value_001").default_value = 0.8
+
+    n3bdepthclamp = add_node(tree, "ShaderNodeMath", "3b.depthclamp",
+                              "Паз_глубина_мм_безоп = min(Паз_глубина_мм, предел)",
+                              4200, -600, operation='MINIMUM')
+    tree.links.new(GI("Паз_глубина_мм"), in_sock(n3bdepthclamp, "Value"))
+    link(tree, n3bwallcap, "Value", n3bdepthclamp, "Value_001")
+
+    n3boff = add_node(tree, "ShaderNodeMath", "3b.off", "offset_паз = falloff_паз * Паз_глубина_мм_безоп",
+                       4460, -400, operation='MULTIPLY')
+    link(tree, n3bfall, "Value", n3boff, "Value")
+    link(tree, n3bdepthclamp, "Value", n3boff, "Value_001")
+
+    frame3b_calc = make_frame(
+        tree, "3b-calc. ГЛАДКИЙ 'КОЛОКОЛ' У КАЖДОГО ШВА (col=0 и col=M/2)",
+        [n3bM, n3bidx, n3bcol, n3bd0a, n3bd0, n3bd1r, n3bd1, n3bdist,
+         n3bband, n3bnorm, n3bmin, n3bpi, n3bcos, n3badd1, n3bfall,
+         n3bwallcap, n3bdepthclamp, n3boff])
+
+    # -- Зад (female): внешняя точка near шва смещается ВНУТРЬ --
+    n3bfdir = named_attr(tree, "3b.fdir", "Читаем 'dir' (для паза, female)",
+                          4460, -600, "dir", 'FLOAT_VECTOR')
+    n3bfvec = add_node(tree, "ShaderNodeVectorMath", "3b.fvec",
+                        "смещение = dir * offset_паз", 4720, -550, operation='SCALE')
+    link(tree, n3bfdir, "Attribute_Vector", n3bfvec, "Vector")
+    link(tree, n3boff, "Value", n3bfvec, "Scale")
+
+    n3bfpos = add_node(tree, "GeometryNodeInputPosition", "3b.fpos",
+                        "Position (внешняя, расширенная)", 4460, -700)
+    n3bfnewpos = add_node(tree, "ShaderNodeVectorMath", "3b.fnewpos",
+                           "female outer = позиция - смещение", 4980, -600, operation='SUBTRACT')
+    link(tree, n3bfpos, "Position", n3bfnewpos, "Vector")
+    link(tree, n3bfvec, "Vector", n3bfnewpos, "Vector_001")
+
+    n_outer_female = add_node(tree, "GeometryNodeSetPosition", "3b.outF",
+                               "Внешние_точки (female, зад) - утоплены у швов", 5240, -600)
+    link(tree, n07b, "Geometry", n_outer_female, "Geometry")
+    link(tree, n3bfnewpos, "Vector", n_outer_female, "Position")
+
+    # -- Перед (male): внутренняя точка near шва смещается НАРУЖУ --
+    n3bmdir = named_attr(tree, "3b.mdir", "Читаем 'dir' (для паза, male)",
+                          4460, -850, "dir", 'FLOAT_VECTOR')
+    n3bmvec = add_node(tree, "ShaderNodeVectorMath", "3b.mvec",
+                        "смещение = dir * offset_паз", 4720, -800, operation='SCALE')
+    link(tree, n3bmdir, "Attribute_Vector", n3bmvec, "Vector")
+    link(tree, n3boff, "Value", n3bmvec, "Scale")
+
+    n3bmpos = add_node(tree, "GeometryNodeInputPosition", "3b.mpos",
+                        "Position (внутренняя, номинальная)", 4460, -950)
+    n3bmnewpos = add_node(tree, "ShaderNodeVectorMath", "3b.mnewpos",
+                           "male inner = позиция + смещение", 4980, -850, operation='ADD')
+    link(tree, n3bmpos, "Position", n3bmnewpos, "Vector")
+    link(tree, n3bmvec, "Vector", n3bmnewpos, "Vector_001")
+
+    n_inner_male = add_node(tree, "GeometryNodeSetPosition", "3b.inM",
+                             "Внутренние_точки (male, перед) - тоньше у швов", 5240, -850)
+    link(tree, n13, "Geometry", n_inner_male, "Geometry")
+    link(tree, n3bmnewpos, "Vector", n_inner_male, "Position")
+
+    frame3b = make_frame(
+        tree, "3b. ПАЗ В ЧЕТВЕРТЬ: female-внешняя (зад) и male-внутренняя (перед) варианты",
+        [n3bfdir, n3bfvec, n3bfpos, n3bfnewpos, n_outer_female,
+         n3bmdir, n3bmvec, n3bmpos, n3bmnewpos, n_inner_male])
 
     # ------------------------------------------------------------------
     # 4. M/2 (граница между передней и задней половиной)
@@ -674,18 +920,19 @@ def build_shell(half_tree):
     frame4 = make_frame(tree, "4. M/2 - ГРАНИЦА ПЕРЕД/ЗАД (боковые швы)", [n14, n15])
 
     # ------------------------------------------------------------------
-    # 5. ДВЕ ПОЛОВИНЫ
+    # 5. ДВЕ ПОЛОВИНЫ (Перед = male: внешняя расширенная, внутренняя с
+    # пазом; Зад = female: внешняя с пазом, внутренняя номинальная)
     # ------------------------------------------------------------------
-    n16 = _grp(tree, half_tree, "3.16", "Перед = Половина(Col 0..M/2)", 2700, 550)
-    tree.links.new(out_sock(n07, "Geometry"), n16.inputs["Внешние_точки"])
-    tree.links.new(out_sock(n13, "Geometry"), n16.inputs["Внутренние_точки"])
+    n16 = _grp(tree, half_tree, "3.16", "Перед = Половина(Col 0..M/2), male", 2700, 550)
+    tree.links.new(out_sock(n07b, "Geometry"), n16.inputs["Внешние_точки"])
+    tree.links.new(out_sock(n_inner_male, "Geometry"), n16.inputs["Внутренние_точки"])
     tree.links.new(GI("Точек_в_кольце"), n16.inputs["M"])
     tree.links.new(out_sock(n09, "Integer"), n16.inputs["N"])
     n16.inputs["Колонка_от"].default_value = 0
     tree.links.new(out_sock(n15, "Integer"), n16.inputs["Колонка_до"])
 
-    n17 = _grp(tree, half_tree, "3.17", "Зад = Половина(Col M/2..M)", 2700, 200)
-    tree.links.new(out_sock(n07, "Geometry"), n17.inputs["Внешние_точки"])
+    n17 = _grp(tree, half_tree, "3.17", "Зад = Половина(Col M/2..M), female", 2700, 200)
+    tree.links.new(out_sock(n_outer_female, "Geometry"), n17.inputs["Внешние_точки"])
     tree.links.new(out_sock(n13, "Geometry"), n17.inputs["Внутренние_точки"])
     tree.links.new(GI("Точек_в_кольце"), n17.inputs["M"])
     tree.links.new(out_sock(n09, "Integer"), n17.inputs["N"])
@@ -773,6 +1020,8 @@ def build_demo_object(axis_tree, profile_tree, shell_tree):
     g3.name = "M.3 Группа 3 (Оболочка)"; g3.label = "M.3 Группа 3 (Оболочка)"
 
     master.links.new(g1.outputs["Ось_кривая"], g2.inputs["Ось_кривая"])
+    master.links.new(g1.outputs["Факт_длина_дуги_мм"], g2.inputs["Длина_сегмента_мм"])
+    master.links.new(g1.outputs["Сторона_ноги"], g2.inputs["Сторона_ноги"])
     master.links.new(g2.outputs["Профиль_точки"], g3.inputs["Профиль_точки"])
     master.links.new(g2.outputs["Точек_в_кольце"], g3.inputs["Точек_в_кольце"])
     master.links.new(g3.outputs["VIS_Вместе"], gout.inputs["Geometry"])
