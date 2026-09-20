@@ -76,12 +76,16 @@ def build():
                      "Средний диапазон ±5°.")
 
     s_calf_h = add_input(
-        tree, "Высота_икры_доля_от_колена", "NodeSocketFloat",
-        default=0.30, min_value=0.10, max_value=0.60,
-        description="Где расположен максимум обхвата икры, в долях длины "
-                     "сегмента, ОТСЧЁТ ОТ КОЛЕНА (точки B) вниз. "
-                     "0.30 = икра максимальна на 30% длины ниже колена "
-                     "(типично для верхней трети голени).")
+        tree, "Высота_икры_мм_от_колена", "NodeSocketFloat",
+        default=105.0, min_value=40.0, max_value=250.0,
+        description="Где расположен максимум обхвата икры — АБСОЛЮТНОЕ "
+                     "расстояние в мм, ОТСЧЁТ ОТ КОЛЕНА (точки B) вниз "
+                     "(замеряется сантиметровой лентой от колена). "
+                     "105 мм ≈ верхняя треть голени при длине 350 мм. "
+                     "Внутри группы делится на Длина_сегмента_мм и "
+                     "автоматически зажимается в 0..1 — если ввести "
+                     "значение больше длины сегмента, точка просто "
+                     "останется на уровне колена, без ошибки.")
 
     s_calf_bow = add_input(
         tree, "Прогиб_икры_мм", "NodeSocketFloat",
@@ -89,6 +93,24 @@ def build():
         description="Дополнительное смещение ОСИ назад (-Y) на уровне "
                      "максимума икры, мм. Это прогиб центральной линии, "
                      "НЕ полный профиль мышцы (профиль сечения — Группа 2).")
+
+    s_lateral_bow = add_input(
+        tree, "Боковой_прогиб_мм", "NodeSocketFloat",
+        default=0.0, min_value=-30.0, max_value=30.0,
+        description="Дополнительное смещение ОСИ по X (медиально/латерально) "
+                     "на той же высоте, что и прогиб икры (точка C) — "
+                     "например, для лёгкой О- или Х-образности голени. "
+                     "Знак умножается на Сторона_ноги, поэтому вводите "
+                     "значение как для 'типовой' стороны — при "
+                     "зеркаливании оно развернётся автоматически.")
+
+    s_leg_side = add_input(
+        tree, "Сторона_ноги", "NodeSocketFloat",
+        default=1.0, min_value=-1.0, max_value=1.0,
+        description="1 = правая нога, -1 = левая (зеркалит все "
+                     "асимметричные по X параметры — боковой прогиб здесь "
+                     "и смещение гребня большеберцовой кости в Группе 2). "
+                     "Передаётся дальше как выход 'Сторона_ноги'.")
 
     s_res = add_input(
         tree, "Разрешение", "NodeSocketInt",
@@ -112,6 +134,8 @@ def build():
                         "Проксимальная точка (колено), мировые координаты.")
     out_len = add_output(tree, "Факт_длина_дуги_мм", "NodeSocketFloat",
                           "Фактическая длина кривой после ресемплинга.")
+    out_side = add_output(tree, "Сторона_ноги", "NodeSocketFloat",
+                           "Проброс входа Сторона_ноги для Группы 2 (асимметрия гребня).")
     out_ok = add_output(tree, "Провер_ВСЕ_OK", "NodeSocketBool",
                          "Итог всех проверок Группы 1 (см. секцию 8).")
     out_report = add_output(tree, "Провер_Отчёт", "NodeSocketString",
@@ -178,13 +202,20 @@ def build():
     frame3 = make_frame(tree, "3. ТОЧКА A (лодыжка, начало координат)", [n107])
 
     # ------------------------------------------------------------------
-    # СЕКЦИЯ 4: точка C (Middle) — прогиб оси на уровне икры
+    # СЕКЦИЯ 4: точка C (Middle) — прогиб оси на уровне икры (Y) и
+    # боковой прогиб (X) на той же высоте
     # ------------------------------------------------------------------
+    n108mm = add_node(tree, "ShaderNodeMath", "1.08mm",
+                       "доля_от_колена = мм_от_колена / Длина (зажато 0..1)",
+                       -150, -220, operation='DIVIDE', use_clamp=True)
+    tree.links.new(GI("Высота_икры_мм_от_колена"), in_sock(n108mm, "Value"))
+    tree.links.new(GI("Длина_сегмента_мм"), in_sock(n108mm, "Value_001"))
+
     n108 = add_node(tree, "ShaderNodeMath", "1.08",
                      "Доля от лодыжки = 1 - доля от колена",
                      150, -220, operation='SUBTRACT')
     in_sock(n108, "Value").default_value = 1.0
-    tree.links.new(GI("Высота_икры_доля_от_колена"), in_sock(n108, "Value_001"))
+    link(tree, n108mm, "Value", n108, "Value_001")
 
     n109 = add_node(tree, "ShaderNodeMix", "1.09",
                      "Точка на прямой A-B на высоте икры",
@@ -193,25 +224,33 @@ def build():
     link(tree, n106, "Vector", n109, "B_Vector")
     link(tree, n108, "Value", n109, "Factor_Float")
 
-    n110 = add_node(tree, "ShaderNodeCombineXYZ", "1.10",
-                     "Направление 'назад' (-Y)", 420, -180)
-    in_sock(n110, "Y").default_value = -1.0
+    n110x = add_node(tree, "ShaderNodeMath", "1.10x",
+                      "X-смещение = Боковой_прогиб_мм * Сторона_ноги",
+                      420, -60, operation='MULTIPLY')
+    tree.links.new(GI("Боковой_прогиб_мм"), in_sock(n110x, "Value"))
+    tree.links.new(GI("Сторона_ноги"), in_sock(n110x, "Value_001"))
 
-    n111 = add_node(tree, "ShaderNodeVectorMath", "1.11",
-                     "Смещение назад = направление * Прогиб_икры_мм",
-                     700, -180, operation='SCALE')
-    link(tree, n110, "Vector", n111, "Vector")
-    tree.links.new(GI("Прогиб_икры_мм"), in_sock(n111, "Scale"))
+    n110y = add_node(tree, "ShaderNodeMath", "1.10y",
+                      "Y-смещение = -Прогиб_икры_мм (назад)",
+                      420, -260, operation='MULTIPLY')
+    tree.links.new(GI("Прогиб_икры_мм"), in_sock(n110y, "Value"))
+    in_sock(n110y, "Value_001").default_value = -1.0
+
+    n110 = add_node(tree, "ShaderNodeCombineXYZ", "1.10",
+                     "Вектор смещения точки C = (X-смещение, Y-смещение, 0)",
+                     700, -160)
+    link(tree, n110x, "Value", n110, "X")
+    link(tree, n110y, "Value", n110, "Y")
 
     n112 = add_node(tree, "ShaderNodeVectorMath", "1.12",
-                     "Точка C (Middle) = точка_на_прямой + смещение_назад",
+                     "Точка C (Middle) = точка_на_прямой + смещение",
                      1300, -20, operation='ADD')
     link(tree, n109, "Result_Vector", n112, "Vector")
-    link(tree, n111, "Vector", n112, "Vector_001")
+    link(tree, n110, "Vector", n112, "Vector_001")
 
     frame4 = make_frame(
-        tree, "4. ТОЧКА ПРОГИБА ИКРЫ (точка C, middle кривой)",
-        [n108, n109, n110, n111, n112])
+        tree, "4. ТОЧКА ПРОГИБА ИКРЫ И БОКОВОГО ПРОГИБА (точка C, middle кривой)",
+        [n108mm, n108, n109, n110x, n110y, n110, n112])
 
     # ------------------------------------------------------------------
     # СЕКЦИЯ 5: построение кривой A -> C -> B
@@ -352,6 +391,7 @@ def build():
     tree.links.new(n107.outputs["Vector"], GO("Точка_A"))
     tree.links.new(n106.outputs["Vector"], GO("Точка_B"))
     tree.links.new(n115.outputs["Length"], GO("Факт_длина_дуги_мм"))
+    tree.links.new(GI("Сторона_ноги"), GO("Сторона_ноги"))
     tree.links.new(v19.outputs["Boolean"], GO("Провер_ВСЕ_OK"))
     tree.links.new(n121.outputs["String"], GO("Провер_Отчёт"))
 

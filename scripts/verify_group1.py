@@ -149,11 +149,18 @@ def main():
     }, out_dir))
     results.append(run_case("calfbow_max", {
         "Прогиб_икры_мм": 40.0,
-        "Высота_икры_доля_от_колена": 0.30,
+        "Высота_икры_мм_от_колена": 105.0,
     }, out_dir))
     results.append(run_case("extreme_length", {
         "Длина_сегмента_мм": 500.0,
         "Разрешение": 96,
+    }, out_dir))
+    results.append(run_case("lateral_bow_left", {
+        "Боковой_прогиб_мм": 20.0,
+        "Сторона_ноги": -1.0,
+    }, out_dir))
+    results.append(run_case("calf_height_clamp", {
+        "Высота_икры_мм_от_колена": 250.0,  # больше длины по умолчанию -> должно зажаться, не сломаться
     }, out_dir))
 
     print("\n=== ИТОГ ===")
