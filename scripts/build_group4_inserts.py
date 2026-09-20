@@ -409,10 +409,23 @@ def build_magnet_insert():
     tree.links.new(pocket_xf.outputs["Geometry"], male_hole_join.inputs["Geometry"])
     tree.links.new(cs_xf.outputs["Geometry"], male_hole_join.inputs["Geometry"])
 
+    # ВАЖНО (найдено доп. проверкой связности после первой версии этой
+    # правки): Join Geometry НЕ сваривает совпадающие вершины на стыке
+    # кармана и зенковки (тот же класс проблемы, что и на швах Группы
+    # 3) - инструмент "Отверстие" оставался формально валидным (0
+    # дырявых рёбер САМ ПО СЕБЕ), но как операнд DIFFERENCE против
+    # оболочки давал дырявые края именно из-за несваренного внутреннего
+    # шва. Merge by Distance прямо здесь чинит это полностью (проверено:
+    # 0 дырявых рёбер на реальной оболочке до и после этого узла).
+    male_hole_merge = add_node(tree, "GeometryNodeMergeByDistance", "4e.31m",
+                                "сварить карман+зенковка (0.02мм)", 2050, -950)
+    link(tree, male_hole_join, "Geometry", male_hole_merge, "Geometry")
+    in_sock(male_hole_merge, "Distance").default_value = 0.02
+
     frameD = make_frame(
         tree, "D. MALE ОТВЕРСТИЕ: карман магнита + зенковка (вглубь модели от узкого торца)",
         [mag_r, mag_r2, pocket_cyl, pocket_depth2, pocket_halfdepth, pocket_depth_from_pos,
-         pocket_xf, cs_cone, cs_halfdepth, cs_depth_from_pos, cs_xf, male_hole_join])
+         pocket_xf, cs_cone, cs_halfdepth, cs_depth_from_pos, cs_xf, male_hole_join, male_hole_merge])
 
     # ------------------------------------------------------------------
     # E. FEMALE ОТВЕРСТИЕ: воронка (конус, повторяет форму male-конуса
@@ -428,15 +441,47 @@ def build_magnet_insert():
     tree.links.new(GI("Кончик_радиус_мм"), in_sock(fem_r_top, "Value"))
     tree.links.new(GI("Посадка_зазор_мм"), in_sock(fem_r_top, "Value_001"))
 
+    # ВАЖНО (найдено доп. проверкой связности): раньше воронка занимала
+    # ВСЮ длину подушки (0..Длина от якоря) - её широкий вход при этом
+    # заканчивался ТОЧНО в плоскости, где подушка касается настоящей
+    # (изогнутой) стены оболочки. Точный Boolean-решатель Blender
+    # регулярно давал дырявые края именно там - тонкий остаток стенки
+    # "подушки" в упор к изогнутой границе оказывался численно
+    # неустойчивым при вычитании (проверено: инструмент "Отверстие" САМ
+    # ПО СЕБЕ идеально замкнут - проблема именно в границе с оболочкой).
+    # Фикс: отступаем вход воронки на 2.5мм от стены - у подушки
+    # остаётся настоящий, не бритвенно-тонкий, слой материала у стены.
+    funnel_setback = add_node(tree, "ShaderNodeValue", "4e.34a",
+                               "отступ воронки от стены = 2.5мм (см. коммент выше)",
+                               400, -1250)
+    funnel_setback.outputs[0].default_value = 2.5
+    funnel_depth = add_node(tree, "ShaderNodeMath", "4e.34b", "глубина воронки = Длина - 2.5мм",
+                             650, -1300, operation='SUBTRACT')
+    tree.links.new(GI("Длина_бобышки_мм"), in_sock(funnel_depth, "Value"))
+    link(tree, funnel_setback, "Value", funnel_depth, "Value_001")
+
     funnel_cone = add_node(tree, "GeometryNodeMeshCone", "4e.34",
-                            "female: воронка (конус, форма male + зазор)", 900, -1450, fill_type='NGON')
+                            "female: воронка (конус, форма male + зазор), короче подушки на отступ",
+                            900, -1450, fill_type='NGON')
     link(tree, fem_r_bottom, "Value", funnel_cone, "Radius Bottom")
     link(tree, fem_r_top, "Value", funnel_cone, "Radius Top")
-    tree.links.new(GI("Длина_бобышки_мм"), in_sock(funnel_cone, "Depth"))
+    link(tree, funnel_depth, "Value", funnel_cone, "Depth")
+
+    funnel_halfdepth = add_node(tree, "ShaderNodeMath", "4e.34c", "глубина_воронки/2",
+                                 650, -1150, operation='MULTIPLY')
+    link(tree, funnel_depth, "Value", funnel_halfdepth, "Value")
+    in_sock(funnel_halfdepth, "Value_001").default_value = 0.5
+    funnel_centerdepth = add_node(tree, "ShaderNodeMath", "4e.34d",
+                                   "смещение центра = отступ + глубина_воронки/2",
+                                   900, -1200, operation='ADD')
+    link(tree, funnel_setback, "Value", funnel_centerdepth, "Value")
+    link(tree, funnel_halfdepth, "Value", funnel_centerdepth, "Value_001")
+    funnel_center = along("4e.34e", "центр воронки (отступ + глубина/2 внутрь)", 400, -1350,
+                           out_sock(funnel_centerdepth, "Value"))
     funnel_xf = add_node(tree, "GeometryNodeTransform", "4e.35", "воронка на место", 1500, -1450)
     link(tree, funnel_cone, "Mesh", funnel_xf, "Geometry")
     link(tree, align, "Rotation", funnel_xf, "Rotation")
-    link(tree, mid_pos, "Vector", funnel_xf, "Translation")
+    link(tree, funnel_center, "Vector", funnel_xf, "Translation")
 
     fem_pocket_xf = add_node(tree, "GeometryNodeTransform", "4e.36", "female карман магнита (та же глубина)",
                               1500, -1700)
@@ -449,15 +494,23 @@ def build_magnet_insert():
     tree.links.new(funnel_xf.outputs["Geometry"], female_hole_join.inputs["Geometry"])
     tree.links.new(fem_pocket_xf.outputs["Geometry"], female_hole_join.inputs["Geometry"])
 
+    # То же сваривание, что и для male-отверстия (см. комментарий у
+    # 4e.31m) - воронка и карман магнита стыкуются несваренным швом.
+    female_hole_merge = add_node(tree, "GeometryNodeMergeByDistance", "4e.37m",
+                                  "сварить воронка+карман (0.02мм)", 2050, -1550)
+    link(tree, female_hole_join, "Geometry", female_hole_merge, "Geometry")
+    in_sock(female_hole_merge, "Distance").default_value = 0.02
+
     frameE = make_frame(
         tree, "E. FEMALE ОТВЕРСТИЕ: воронка под male-конус (+Посадка_зазор) + карман магнита у torec",
-        [fem_r_bottom, fem_r_top, funnel_cone, funnel_xf, fem_pocket_xf, female_hole_join])
+        [fem_r_bottom, fem_r_top, funnel_setback, funnel_depth, funnel_cone, funnel_halfdepth,
+         funnel_centerdepth, funnel_xf, fem_pocket_xf, female_hole_join, female_hole_merge])
 
     hole_sw = add_node(tree, "GeometryNodeSwitch", "4e.38", "male? отверстие", 2100, -1150,
                         input_type='GEOMETRY')
     link(tree, male_cmp, "Result", hole_sw, "Switch_001")
-    link(tree, female_hole_join, "Geometry", hole_sw, "False_006")
-    link(tree, male_hole_join, "Geometry", hole_sw, "True_006")
+    link(tree, female_hole_merge, "Geometry", hole_sw, "False_006")
+    link(tree, male_hole_merge, "Geometry", hole_sw, "True_006")
 
     # ------------------------------------------------------------------
     # F. РЕБРО ЖЁСТКОСТИ (опционально): тонкий гребень вдоль -dir,
@@ -509,12 +562,17 @@ def build_magnet_insert():
     boss_plus_rib = add_node(tree, "GeometryNodeJoinGeometry", "4e.48", "бобышка + ребро", 2100, 380)
     link(tree, boss_sw, "Output_006", boss_plus_rib, "Geometry")
     link(tree, rib_sw, "Output_006", boss_plus_rib, "Geometry")
+    boss_rib_merge = add_node(tree, "GeometryNodeMergeByDistance", "4e.48m",
+                               "сварить бобышка+ребро (0.02мм)", 2350, 380)
+    link(tree, boss_plus_rib, "Geometry", boss_rib_merge, "Geometry")
+    in_sock(boss_rib_merge, "Distance").default_value = 0.02
 
     frameF = make_frame(
         tree, "F. РЕБРО ЖЁСТКОСТИ (опционально, толщина=0 отключает)",
-        [rib_cube, rib_h, ribsize, rib_sc, rib_align, rib_xf, rib_on, empty_rib, rib_sw, boss_plus_rib])
+        [rib_cube, rib_h, ribsize, rib_sc, rib_align, rib_xf, rib_on, empty_rib, rib_sw,
+         boss_plus_rib, boss_rib_merge])
 
-    tree.links.new(boss_plus_rib.outputs["Geometry"], gout.inputs["Бобышка"])
+    tree.links.new(boss_rib_merge.outputs["Geometry"], gout.inputs["Бобышка"])
     tree.links.new(out_sock(hole_sw, "Output_006"), gout.inputs["Отверстие"])
     return tree
 
@@ -950,6 +1008,13 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
               description="Толщина ребра жёсткости закладной магнита (0 = без ребра).")
     add_input(tree, "Закладная_нахлёст_мм", "NodeSocketFloat", default=1.5, min_value=0.0, max_value=4.0,
               description="Нахлёст закладной в стену (надёжность Boolean на кривой поверхности).")
+    add_input(tree, "Закладная_запас_до_стены_мм", "NodeSocketFloat", default=5.0,
+              min_value=2.0, max_value=15.0,
+              description="Закладная растёт вдоль фиксированного направления (0,1,0), а не по "
+                           "нормали стены - на узких участках (лодыжка, короткая накладка) этого "
+                           "направления может не хватить до противоположной стенки. Длина "
+                           "закладной автоматически урезается (Raycast), чтобы всегда оставался "
+                           "минимум этот запас до внутренней поверхности Перед.")
     add_input(tree, "Короткая_накладка_порог_мм", "NodeSocketFloat", default=280.0,
               min_value=150.0, max_value=400.0,
               description="Если Длина_сегмента (из Группы 1/2) меньше этого порога - "
@@ -1122,16 +1187,97 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
                           [is_short, keep_extra, empty_geo])
 
     # ------------------------------------------------------------------
+    # 3c. БЕЗОПАСНАЯ ДЛИНА ЗАКЛАДНОЙ: закладная растёт вдоль фиксированной
+    # 'Ось' (0,1,0), а не по нормали стены (см. NK.4e) - на узких участках
+    # (у лодыжки, короткая накладка) этого направления иногда не хватает
+    # до противоположной стенки, и Boolean-вычитание кармана magnitа
+    # "простреливает" переднюю стенку насквозь, давая дырявые края
+    # (обнаружено доп. проверкой связности - см. docs). Меряем реальный
+    # запас лучом (Raycast) от якоря закладной вдоль 'Ось' до внутренней
+    # поверхности Перед и не даём длине его превысить (с запасом).
+    # ------------------------------------------------------------------
+    def safe_length(num, x, y, pos_node, dir_node):
+        dirn = add_node(tree, "ShaderNodeVectorMath", num + "dn", "dir единичный",
+                         x, y, operation='NORMALIZE')
+        tree.links.new(out_sock(dir_node, "Value_Vector"), in_sock(dirn, "Vector"))
+        inset_depth = add_node(tree, "ShaderNodeMath", num + "id",
+                                "утопление = (Радиус_бобышки+3) - нахлёст", x + 200, y + 150,
+                                operation='SUBTRACT')
+        padr = add_node(tree, "ShaderNodeMath", num + "pr", "Радиус_бобышки+3 (=R_подушки)",
+                         x, y + 250, operation='ADD')
+        tree.links.new(GI("Закладная_радиус_мм"), in_sock(padr, "Value"))
+        in_sock(padr, "Value_001").default_value = 3.0
+        link(tree, padr, "Value", inset_depth, "Value")
+        tree.links.new(GI("Закладная_нахлёст_мм"), in_sock(inset_depth, "Value_001"))
+        inset_vec = add_node(tree, "ShaderNodeVectorMath", num + "iv", "-dir*утопление",
+                              x + 400, y + 150, operation='SCALE')
+        link(tree, dirn, "Vector", inset_vec, "Vector")
+        inset_neg = add_node(tree, "ShaderNodeMath", num + "in", "* -1", x + 200, y + 300,
+                              operation='MULTIPLY')
+        link(tree, inset_depth, "Value", inset_neg, "Value")
+        in_sock(inset_neg, "Value_001").default_value = -1.0
+        link(tree, inset_neg, "Value", inset_vec, "Scale")
+        anchor = add_node(tree, "ShaderNodeVectorMath", num + "an", "якорь = Позиция - dir*утопление",
+                           x + 600, y + 50, operation='ADD')
+        tree.links.new(out_sock(pos_node, "Value_Vector"), in_sock(anchor, "Vector"))
+        link(tree, inset_vec, "Vector", anchor, "Vector_001")
+
+        rc = add_node(tree, "GeometryNodeRaycast", num + "rc",
+                       "луч от якоря вдоль Оси (0,1,0) до стены Перед", x + 850, y)
+        tree.links.new(GI("Перед"), in_sock(rc, "Target Geometry"))
+        link(tree, anchor, "Vector", rc, "Source Position")
+        in_sock(rc, "Ray Direction").default_value = (0.0, 1.0, 0.0)
+        in_sock(rc, "Ray Length").default_value = 500.0
+
+        margin_dist = add_node(tree, "ShaderNodeMath", num + "md",
+                                "запас = луч_расстояние - Закладная_запас_до_стены_мм",
+                                x + 1100, y, operation='SUBTRACT')
+        link(tree, rc, "Hit Distance", margin_dist, "Value")
+        tree.links.new(GI("Закладная_запас_до_стены_мм"), in_sock(margin_dist, "Value_001"))
+
+        not_hit_fallback = add_node(tree, "GeometryNodeSwitch", num + "nf",
+                                     "луч не попал? -> взять заданную длину как есть",
+                                     x + 1100, y - 150, input_type='FLOAT')
+        link(tree, rc, "Is Hit", not_hit_fallback, "Switch")
+        tree.links.new(GI("Закладная_длина_мм"), in_sock(not_hit_fallback, "False"))
+        link(tree, margin_dist, "Value", not_hit_fallback, "True")
+
+        clamped = add_node(tree, "ShaderNodeMath", num + "cl",
+                            "safe_length = min(Закладная_длина_мм, запас)", x + 1350, y,
+                            operation='MINIMUM')
+        tree.links.new(GI("Закладная_длина_мм"), in_sock(clamped, "Value"))
+        link(tree, not_hit_fallback, "Output", clamped, "Value_001")
+        clamped_pos = add_node(tree, "ShaderNodeMath", num + "cp",
+                                "не меньше 4мм (разумный минимум)", x + 1600, y,
+                                operation='MAXIMUM')
+        link(tree, clamped, "Value", clamped_pos, "Value")
+        in_sock(clamped_pos, "Value_001").default_value = 4.0
+
+        nodes = [dirn, padr, inset_depth, inset_vec, inset_neg, anchor, rc,
+                 margin_dist, not_hit_fallback, clamped, clamped_pos]
+        return nodes, clamped_pos
+
+    len_nodes_a1, safelen_a1 = safe_length("4.13la", 400, -700, seamA_h1, seamA_h1_dir)
+    len_nodes_b1, safelen_b1 = safe_length("4.13lb", 400, -1000, seamB_h1, seamB_h1_dir)
+    len_nodes_a2, safelen_a2 = safe_length("4.13lc", 400, -1300, seamA_h2, seamA_h2_dir)
+    len_nodes_b2, safelen_b2 = safe_length("4.13ld", 400, -1600, seamB_h2, seamB_h2_dir)
+
+    frame3len = make_frame(
+        tree, "3c. БЕЗОПАСНАЯ ДЛИНА ЗАКЛАДНОЙ (Raycast до стены Перед вдоль Оси, не даёт "
+        "закладной 'прострелить' стенку на узких участках)",
+        len_nodes_a1 + len_nodes_b1 + len_nodes_a2 + len_nodes_b2)
+
+    # ------------------------------------------------------------------
     # 3b. ЗАКЛАДНЫЕ МАГНИТОВ: Перед=female (воронка+магнит на дне),
     # Зад=male (усечённый конус+зенковка на торце) - NK.4e_Закладная_магнита
     # ------------------------------------------------------------------
-    def magnet_insert(num, label, x, y, pos_node, dir_node, male_val, gate_extra):
+    def magnet_insert(num, label, x, y, pos_node, dir_node, male_val, gate_extra, safelen_node):
         g = _grp(tree, magnet_tree, num, label, x, y)
         tree.links.new(out_sock(pos_node, "Value_Vector"), g.inputs["Позиция"])
         tree.links.new(out_sock(dir_node, "Value_Vector"), g.inputs["Dir"])
         g.inputs["Male"].default_value = male_val
         tree.links.new(GI("Закладная_радиус_мм"), g.inputs["Радиус_бобышки_мм"])
-        tree.links.new(GI("Закладная_длина_мм"), g.inputs["Длина_бобышки_мм"])
+        tree.links.new(out_sock(safelen_node, "Value"), g.inputs["Длина_бобышки_мм"])
         tree.links.new(GI("Закладная_кончик_радиус_мм"), g.inputs["Кончик_радиус_мм"])
         tree.links.new(GI("Закладная_посадка_зазор_мм"), g.inputs["Посадка_зазор_мм"])
         tree.links.new(GI("Магнит_диаметр_мм"), g.inputs["Магнит_диаметр_мм"])
@@ -1158,22 +1304,22 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
         return out_sock(boss_sw, "Output_006"), out_sock(hole_sw, "Output_006")
 
     mag_front_1_b, mag_front_1_h = magnet_insert("4.14", "магнит перед(female): шов1 высота1",
-                                                  1300, 900, seamA_h1, seamA_h1_dir, 0.0, False)
+                                                  1300, 900, seamA_h1, seamA_h1_dir, 0.0, False, safelen_a1)
     mag_front_2_b, mag_front_2_h = magnet_insert("4.15", "магнит перед(female): шов2 высота1",
-                                                  1300, 750, seamB_h1, seamB_h1_dir, 0.0, True)
+                                                  1300, 750, seamB_h1, seamB_h1_dir, 0.0, True, safelen_b1)
     mag_front_3_b, mag_front_3_h = magnet_insert("4.16", "магнит перед(female): шов1 высота2",
-                                                  1300, 600, seamA_h2, seamA_h2_dir, 0.0, True)
+                                                  1300, 600, seamA_h2, seamA_h2_dir, 0.0, True, safelen_a2)
     mag_front_4_b, mag_front_4_h = magnet_insert("4.17", "магнит перед(female): шов2 высота2",
-                                                  1300, 450, seamB_h2, seamB_h2_dir, 0.0, True)
+                                                  1300, 450, seamB_h2, seamB_h2_dir, 0.0, True, safelen_b2)
 
     mag_back_1_b, mag_back_1_h = magnet_insert("4.18", "магнит зад(male): шов1 высота1",
-                                                1300, 250, seamA_h1, seamA_h1_dir, 1.0, False)
+                                                1300, 250, seamA_h1, seamA_h1_dir, 1.0, False, safelen_a1)
     mag_back_2_b, mag_back_2_h = magnet_insert("4.19", "магнит зад(male): шов2 высота1",
-                                                1300, 100, seamB_h1, seamB_h1_dir, 1.0, True)
+                                                1300, 100, seamB_h1, seamB_h1_dir, 1.0, True, safelen_b1)
     mag_back_3_b, mag_back_3_h = magnet_insert("4.20", "магнит зад(male): шов1 высота2",
-                                                1300, -50, seamA_h2, seamA_h2_dir, 1.0, True)
+                                                1300, -50, seamA_h2, seamA_h2_dir, 1.0, True, safelen_a2)
     mag_back_4_b, mag_back_4_h = magnet_insert("4.21", "магнит зад(male): шов2 высота2",
-                                                1300, -200, seamB_h2, seamB_h2_dir, 1.0, True)
+                                                1300, -200, seamB_h2, seamB_h2_dir, 1.0, True, safelen_b2)
 
     frame3b = make_frame(
         tree, "3b. 8 ЗАКЛАДНЫХ МАГНИТОВ (4 female на Перед, 4 male на Зад; "
@@ -1321,7 +1467,7 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     tree.links.new(df.outputs["Mesh"], vjoin.inputs["Geometry"])
     tree.links.new(db.outputs["Mesh"], vjoin.inputs["Geometry"])
 
-    def watertight_check(num, label, x, y, geo_node):
+    def watertight_check(num, label, x, y, geo_socket):
         en = add_node(tree, "GeometryNodeInputMeshEdgeNeighbors", num + "a",
                        "кол-во граней/ребро", x, y)
         cmp = add_node(tree, "FunctionNodeCompare", num + "b", "ребро граничное?",
@@ -1330,7 +1476,7 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
         in_sock(cmp, "B_INT").default_value = 2
         stat = add_node(tree, "GeometryNodeAttributeStatistic", num + "c",
                          "сумма граничных рёбер", x + 520, y, domain='EDGE')
-        tree.links.new(geo_node.outputs["Mesh"], in_sock(stat, "Geometry"))
+        tree.links.new(geo_socket, in_sock(stat, "Geometry"))
         link(tree, cmp, "Result", stat, "Attribute")
         ok = add_node(tree, "FunctionNodeCompare", num + "d", "== 0 ?", x + 780, y,
                        data_type='FLOAT', operation='EQUAL')
@@ -1338,8 +1484,8 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
         in_sock(ok, "B").default_value = 0.0
         return [en, cmp, stat, ok], ok
 
-    vf_nodes, vf_ok = watertight_check("V4.1", "watertight", 2600, 250, df)
-    vb_nodes, vb_ok = watertight_check("V4.2", "watertight", 2600, 0, db)
+    vf_nodes, vf_ok = watertight_check("V4.1", "watertight", 2600, 250, df.outputs["Mesh"])
+    vb_nodes, vb_ok = watertight_check("V4.2", "watertight", 2600, 0, db.outputs["Mesh"])
 
     v_all = add_node(tree, "FunctionNodeBooleanMath", "V4.3",
                       "ИТОГ: обе половины замкнуты", 3400, 150, operation='AND')
