@@ -753,25 +753,36 @@ def build_clamp(boss_tree):
               min_value=0.0, max_value=2.0,
               description="Радиальный зазор между внутренней стенкой хомута и трубкой протеза, "
                            "мм (посадочный зазор, чтобы хомут не давил на трубку напрямую).")
-    add_input(tree, "Гайка_диаметр_мм", "NodeSocketFloat", default=4.0,
-              min_value=3.6, max_value=4.6)
-    add_input(tree, "Гайка_глубина_мм", "NodeSocketFloat", default=5.0,
-              min_value=3.0, max_value=8.0)
+    add_input(tree, "Гайка_диаметр_мм", "NodeSocketFloat", default=4.2,
+              min_value=3.6, max_value=4.6,
+              description="Диаметр пилотного отверстия под гайку М3, мм (Ø4.2мм по ТЗ).")
+    add_input(tree, "Гайка_глубина_мм", "NodeSocketFloat", default=5.5,
+              min_value=3.0, max_value=8.0,
+              description="Глубина пилотного отверстия под гайку М3, мм (5.5мм по ТЗ).")
     add_input(tree, "Винт_зазор_диаметр_мм", "NodeSocketFloat", default=3.2,
               min_value=3.2, max_value=3.8,
               description="Диаметр сквозного отверстия под винт М3, мм (Ø3.2мм по ТЗ).")
-    add_input(tree, "Стойка_радиус_мм", "NodeSocketFloat", default=5.5, min_value=3.5, max_value=10.0,
-              description="Радиус закладной-стойки под гайку на внутренней стороне передней панели.")
-    add_input(tree, "Хомут_зазор_под_шайбы_мм", "NodeSocketFloat", default=1.5,
-              min_value=0.0, max_value=5.0,
-              description="Зазор между стойкой (на стене) и концом хомута - место под шайбы "
-                           "для тонкой корректировки позиционирования.")
+    add_input(tree, "Стойка_радиус_мм", "NodeSocketFloat", default=7.0, min_value=3.5, max_value=10.0,
+              description="Радиус закладной-стойки/платика под гайку на внутренней стороне "
+                           "панели, мм (диаметр 14мм - в диапазоне ширины платика 12-15мм по ТЗ).")
+    add_input(tree, "Хомут_зазор_под_шайбы_мм", "NodeSocketFloat", default=3.0,
+              min_value=2.0, max_value=4.0,
+              description="Зазор между стойкой-платиком (на стене) и концом хомута - место под "
+                           "размерные шайбы для компенсации неточностей печати/сборки (2-4мм по ТЗ).")
     add_input(tree, "Хомут_галтель_мм", "NodeSocketFloat", default=2.0,
               min_value=1.5, max_value=2.5,
               description="Радиус сопряжения (галтели) между ушком под винт и телом полукольца - "
                            "приближено 'шариком' сглаживания в корне ушка (в Blender 4.0 GN нет "
                            "узла Fillet для мешей, только для кривых - см. docs про это упрощение), "
                            "убирает острый вогнутый угол-концентратор напряжений.")
+    add_input(tree, "Хомут_стойка_ребро_толщина_мм", "NodeSocketFloat", default=1.75,
+              min_value=1.5, max_value=2.0,
+              description="Толщина ребра жёсткости вдоль стойки-платика под гайку хомута, мм "
+                           "(1.5-2мм по ТЗ).")
+    add_input(tree, "Хомут_стойка_ребро_высота_мм", "NodeSocketFloat", default=2.5,
+              min_value=2.0, max_value=3.0,
+              description="Высота ребра жёсткости вдоль стойки-платика под гайку хомута, мм "
+                           "(2-3мм по ТЗ).")
     add_output(tree, "Перед", "NodeSocketGeometry")
     add_output(tree, "Зад", "NodeSocketGeometry")
 
@@ -1087,11 +1098,49 @@ def build_clamp(boss_tree):
         tree.links.new(out_sock(len_total, "Value"), g.inputs["Длина_бобышки_мм"])
         tree.links.new(nut_r.outputs["Value"], g.inputs["Радиус_отверстия_мм"])
         tree.links.new(GI("Гайка_глубина_мм"), g.inputs["Глубина_отверстия_мм"])
-        return ([prox, reach, reach_n, standoff_len, standoff_len_safe, standoff_len_pos,
-                 len_total, near_off, near_point, half_len, half_off, standoff_center, g], g)
 
-    standoff1_nodes, standoff1 = nut_standoff("4a.33", "стойка-гайка (конец1)", 1000, -900, n16)
-    standoff2_nodes, standoff2 = nut_standoff("4a.34", "стойка-гайка (конец2)", 1000, -1250, n17)
+        # -- ребро жёсткости вдоль стойки (по ТЗ: через платик от края
+        # до края, параллельно горизонтальной плоскости) --
+        rib_cube2 = add_node(tree, "GeometryNodeMeshCube", num + "rc", "куб-ребро 1x1x1",
+                              x + 1600, y - 300)
+        in_sock(rib_cube2, "Size").default_value = (1.0, 1.0, 1.0)
+        rib_size2 = add_node(tree, "ShaderNodeCombineXYZ", num + "rs",
+                              "размер=(толщина, длина=длина стойки+нахлёст, высота)",
+                              x + 1860, y - 300)
+        tree.links.new(GI("Хомут_стойка_ребро_толщина_мм"), in_sock(rib_size2, "X"))
+        link(tree, len_total, "Value", rib_size2, "Y")
+        tree.links.new(GI("Хомут_стойка_ребро_высота_мм"), in_sock(rib_size2, "Z"))
+        rib_sc2 = add_node(tree, "GeometryNodeTransform", num + "rsc", "масштаб ребра",
+                            x + 2120, y - 300)
+        link(tree, rib_cube2, "Mesh", rib_sc2, "Geometry")
+        link(tree, rib_size2, "Vector", rib_sc2, "Scale")
+        rib_align2 = add_node(tree, "FunctionNodeAlignEulerToVector", num + "ra",
+                               "Euler: локальный Y -> направление стойки",
+                               x + 1860, y - 450)
+        rib_align2.axis = 'Y'
+        link(tree, reach_n, "Vector", rib_align2, "Vector")
+        rib_xf2 = add_node(tree, "GeometryNodeTransform", num + "rxf",
+                            "ребро на место (центр = центр стойки)", x + 2380, y - 300)
+        link(tree, rib_sc2, "Geometry", rib_xf2, "Geometry")
+        link(tree, rib_align2, "Rotation", rib_xf2, "Rotation")
+        link(tree, standoff_center, "Vector", rib_xf2, "Translation")
+
+        boss_rib_u = add_node(tree, "GeometryNodeMeshBoolean", num + "bru",
+                               "стойка UNION ребро", x + 2640, y, operation='UNION')
+        tree.links.new(g.outputs["Бобышка"], in_sock(boss_rib_u, "Mesh 2"))
+        tree.links.new(rib_xf2.outputs["Geometry"], in_sock(boss_rib_u, "Mesh 2"))
+        boss_rib_u_merge = add_node(tree, "GeometryNodeMergeByDistance", num + "brum",
+                                     "сварить после UNION (0.02мм)", x + 2900, y)
+        link(tree, boss_rib_u, "Mesh", boss_rib_u_merge, "Geometry")
+        in_sock(boss_rib_u_merge, "Distance").default_value = 0.02
+
+        return ([prox, reach, reach_n, standoff_len, standoff_len_safe, standoff_len_pos,
+                 len_total, near_off, near_point, half_len, half_off, standoff_center, g,
+                 rib_cube2, rib_size2, rib_sc2, rib_align2, rib_xf2, boss_rib_u, boss_rib_u_merge],
+                g, boss_rib_u_merge)
+
+    standoff1_nodes, standoff1, standoff1_boss = nut_standoff("4a.33", "стойка-гайка (конец1)", 1000, -900, n16)
+    standoff2_nodes, standoff2, standoff2_boss = nut_standoff("4a.34", "стойка-гайка (конец2)", 1000, -1250, n17)
 
     frame5b = make_frame(
         tree, "5b. ЗАКЛАДНЫЕ-СТОЙКИ ПОД ГАЙКУ (растут ОТ стены Перед к хомуту, "
@@ -1103,8 +1152,8 @@ def build_clamp(boss_tree):
                    "бобышки перед + стойки-гайки + галтели ушек", 1300, -50)
     tree.links.new(g1.outputs["Бобышка"], j1.inputs["Geometry"])
     tree.links.new(g2.outputs["Бобышка"], j1.inputs["Geometry"])
-    tree.links.new(standoff1.outputs["Бобышка"], j1.inputs["Geometry"])
-    tree.links.new(standoff2.outputs["Бобышка"], j1.inputs["Geometry"])
+    tree.links.new(standoff1_boss.outputs["Geometry"], j1.inputs["Geometry"])
+    tree.links.new(standoff2_boss.outputs["Geometry"], j1.inputs["Geometry"])
     tree.links.new(fb1.outputs["Geometry"], j1.inputs["Geometry"])
     tree.links.new(fb2.outputs["Geometry"], j1.inputs["Geometry"])
 
@@ -1185,20 +1234,38 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     add_input(tree, "Колец_всего", "NodeSocketInt", default=48, min_value=2, max_value=4096)
 
     add_input(tree, "Трубка_диаметр_мм", "NodeSocketFloat", default=25.0, min_value=16.0, max_value=35.0)
-    add_input(tree, "Хомут_толщина_мм", "NodeSocketFloat", default=3.5, min_value=2.5, max_value=6.0)
-    add_input(tree, "Хомут_высота_мм", "NodeSocketFloat", default=14.0, min_value=8.0, max_value=25.0)
-    add_input(tree, "Хомут1_высота_доля_от_колена", "NodeSocketFloat", default=0.20,
-              min_value=0.0, max_value=1.0)
-    add_input(tree, "Хомут2_высота_доля_от_колена", "NodeSocketFloat", default=0.80,
-              min_value=0.0, max_value=1.0)
-    add_input(tree, "Гайка_диаметр_мм", "NodeSocketFloat", default=4.0, min_value=3.6, max_value=4.6)
-    add_input(tree, "Гайка_глубина_мм", "NodeSocketFloat", default=5.0, min_value=3.0, max_value=8.0)
-    add_input(tree, "Винт_зазор_диаметр_мм", "NodeSocketFloat", default=3.4, min_value=3.2, max_value=3.8)
-    add_input(tree, "Стойка_радиус_мм", "NodeSocketFloat", default=5.5, min_value=3.5, max_value=10.0,
-              description="Радиус закладной-стойки под гайку на внутренней стороне передней панели.")
-    add_input(tree, "Хомут_зазор_под_шайбы_мм", "NodeSocketFloat", default=1.5,
-              min_value=0.0, max_value=5.0,
-              description="Зазор между стойкой и концом хомута - место под шайбы.")
+    add_input(tree, "Хомут_толщина_мм", "NodeSocketFloat", default=3.5, min_value=3.0, max_value=4.0,
+              description="Толщина стенки полукольца хомута, мм (3-4мм по ТЗ).")
+    add_input(tree, "Хомут_высота_мм", "NodeSocketFloat", default=13.0, min_value=10.0, max_value=15.0,
+              description="Высота полукольца хомута, мм (10-15мм по ТЗ).")
+    add_input(tree, "Хомут_зазор_трубка_мм", "NodeSocketFloat", default=0.5, min_value=0.0, max_value=2.0,
+              description="Радиальный зазор между хомутом и трубкой протеза, мм.")
+    add_input(tree, "Хомут_галтель_мм", "NodeSocketFloat", default=2.0, min_value=1.5, max_value=2.5,
+              description="Радиус сопряжения (галтели) ушко<->полукольцо хомута, мм.")
+    add_input(tree, "Хомут1_высота_доля_от_колена", "NodeSocketFloat", default=0.25,
+              min_value=0.0, max_value=1.0,
+              description="Factor вдоль оси для нижнего хомута (0.25 по ТЗ).")
+    add_input(tree, "Хомут2_высота_доля_от_колена", "NodeSocketFloat", default=0.75,
+              min_value=0.0, max_value=1.0,
+              description="Factor вдоль оси для верхнего хомута (0.75 по ТЗ).")
+    add_input(tree, "Гайка_диаметр_мм", "NodeSocketFloat", default=4.2, min_value=3.6, max_value=4.6,
+              description="Диаметр пилотного отверстия под гайку М3, мм (Ø4.2мм по ТЗ).")
+    add_input(tree, "Гайка_глубина_мм", "NodeSocketFloat", default=5.5, min_value=3.0, max_value=8.0,
+              description="Глубина пилотного отверстия под гайку М3, мм (5.5мм по ТЗ).")
+    add_input(tree, "Винт_зазор_диаметр_мм", "NodeSocketFloat", default=3.2, min_value=3.2, max_value=3.8)
+    add_input(tree, "Стойка_радиус_мм", "NodeSocketFloat", default=7.0, min_value=3.5, max_value=10.0,
+              description="Радиус закладной-стойки/платика под гайку, мм (диаметр 14мм, в "
+                           "диапазоне ширины платика 12-15мм по ТЗ).")
+    add_input(tree, "Хомут_зазор_под_шайбы_мм", "NodeSocketFloat", default=3.0,
+              min_value=2.0, max_value=4.0,
+              description="Зазор между стойкой-платиком и концом хомута - место под размерные "
+                           "шайбы (2-4мм по ТЗ).")
+    add_input(tree, "Хомут_стойка_ребро_толщина_мм", "NodeSocketFloat", default=1.75,
+              min_value=1.5, max_value=2.0,
+              description="Толщина ребра жёсткости вдоль стойки-платика хомута, мм (1.5-2мм по ТЗ).")
+    add_input(tree, "Хомут_стойка_ребро_высота_мм", "NodeSocketFloat", default=2.5,
+              min_value=2.0, max_value=3.0,
+              description="Высота ребра жёсткости вдоль стойки-платика хомута, мм (2-3мм по ТЗ).")
 
     add_input(tree, "Магнит_диаметр_мм", "NodeSocketFloat", default=10.0, min_value=8.0, max_value=12.0,
               description="Диаметр кольцевого магнита, мм (Ø10мм по ТЗ - кольцевой, с отверстием "
@@ -1281,11 +1348,15 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     tree.links.new(GI("Трубка_диаметр_мм"), c1.inputs["Трубка_диаметр_мм"])
     tree.links.new(GI("Хомут_толщина_мм"), c1.inputs["Хомут_толщина_мм"])
     tree.links.new(GI("Хомут_высота_мм"), c1.inputs["Хомут_высота_мм"])
+    tree.links.new(GI("Хомут_зазор_трубка_мм"), c1.inputs["Хомут_зазор_трубка_мм"])
     tree.links.new(GI("Гайка_диаметр_мм"), c1.inputs["Гайка_диаметр_мм"])
     tree.links.new(GI("Гайка_глубина_мм"), c1.inputs["Гайка_глубина_мм"])
     tree.links.new(GI("Винт_зазор_диаметр_мм"), c1.inputs["Винт_зазор_диаметр_мм"])
     tree.links.new(GI("Стойка_радиус_мм"), c1.inputs["Стойка_радиус_мм"])
     tree.links.new(GI("Хомут_зазор_под_шайбы_мм"), c1.inputs["Хомут_зазор_под_шайбы_мм"])
+    tree.links.new(GI("Хомут_галтель_мм"), c1.inputs["Хомут_галтель_мм"])
+    tree.links.new(GI("Хомут_стойка_ребро_толщина_мм"), c1.inputs["Хомут_стойка_ребро_толщина_мм"])
+    tree.links.new(GI("Хомут_стойка_ребро_высота_мм"), c1.inputs["Хомут_стойка_ребро_высота_мм"])
 
     c2 = _grp(tree, clamp_tree, "4.03", "Хомут 2", 400, 700)
     tree.links.new(c1.outputs["Перед"], c2.inputs["Перед"])
@@ -1296,11 +1367,15 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     tree.links.new(GI("Трубка_диаметр_мм"), c2.inputs["Трубка_диаметр_мм"])
     tree.links.new(GI("Хомут_толщина_мм"), c2.inputs["Хомут_толщина_мм"])
     tree.links.new(GI("Хомут_высота_мм"), c2.inputs["Хомут_высота_мм"])
+    tree.links.new(GI("Хомут_зазор_трубка_мм"), c2.inputs["Хомут_зазор_трубка_мм"])
     tree.links.new(GI("Гайка_диаметр_мм"), c2.inputs["Гайка_диаметр_мм"])
     tree.links.new(GI("Гайка_глубина_мм"), c2.inputs["Гайка_глубина_мм"])
     tree.links.new(GI("Винт_зазор_диаметр_мм"), c2.inputs["Винт_зазор_диаметр_мм"])
     tree.links.new(GI("Стойка_радиус_мм"), c2.inputs["Стойка_радиус_мм"])
     tree.links.new(GI("Хомут_зазор_под_шайбы_мм"), c2.inputs["Хомут_зазор_под_шайбы_мм"])
+    tree.links.new(GI("Хомут_галтель_мм"), c2.inputs["Хомут_галтель_мм"])
+    tree.links.new(GI("Хомут_стойка_ребро_толщина_мм"), c2.inputs["Хомут_стойка_ребро_толщина_мм"])
+    tree.links.new(GI("Хомут_стойка_ребро_высота_мм"), c2.inputs["Хомут_стойка_ребро_высота_мм"])
 
     frame1 = make_frame(tree, "1. ДВА ХОМУТА (цепочкой через Перед/Зад)", [c1, c2])
 
