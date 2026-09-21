@@ -184,17 +184,35 @@ def build_magnet_insert():
                            "Одно и то же значение для male/female в одной паре - тогда male-конус "
                            "'дотягивается' ровно туда же, где female открывает воронку.")
     add_input(tree, "Male", "NodeSocketFloat", default=0.0, min_value=0.0, max_value=1.0,
-              description="0 = female (перед, воронка+магнит на дне), 1 = male (зад, конус+зенковка на торце).")
-    add_input(tree, "Радиус_бобышки_мм", "NodeSocketFloat", default=9.0, min_value=5.0, max_value=20.0)
-    add_input(tree, "Длина_бобышки_мм", "NodeSocketFloat", default=14.0, min_value=6.0, max_value=30.0)
-    add_input(tree, "Кончик_радиус_мм", "NodeSocketFloat", default=6.0, min_value=3.0, max_value=15.0)
+              description="0 = female (перед, воронка+магнит на дне, клеевая), 1 = male (зад, "
+                           "усечённый конус+магнит на винте у узкого торца).")
+    add_input(tree, "Радиус_бобышки_мм", "NodeSocketFloat", default=8.5, min_value=6.0, max_value=12.0,
+              description="Радиус ШИРОКОГО торца (у стены), мм - широкий торец Ø16-18мм по ТЗ.")
+    add_input(tree, "Длина_бобышки_мм", "NodeSocketFloat", default=7.0, min_value=4.0, max_value=12.0,
+              description="Высота усечённого конуса, мм (6-8мм по ТЗ).")
+    add_input(tree, "Кончик_радиус_мм", "NodeSocketFloat", default=6.0, min_value=5.5, max_value=15.0,
+              description="Радиус УЗКОГО торца (посадка под магнит), мм - узкий торец >=Ø11мм по ТЗ "
+                           "(магнит Ø10 + 0.1мм зазор).")
     add_input(tree, "Посадка_зазор_мм", "NodeSocketFloat", default=0.3, min_value=0.1, max_value=1.0,
               description="Зазор между male-конусом и female-воронкой (посадка с возможностью сборки).")
     add_input(tree, "Магнит_диаметр_мм", "NodeSocketFloat", default=10.0, min_value=6.0, max_value=14.0)
-    add_input(tree, "Магнит_глубина_мм", "NodeSocketFloat", default=3.0, min_value=1.0, max_value=6.0)
-    add_input(tree, "Магнит_зазор_мм", "NodeSocketFloat", default=0.2, min_value=0.0, max_value=1.0)
+    add_input(tree, "Магнит_глубина_мм", "NodeSocketFloat", default=3.1, min_value=1.0, max_value=6.0,
+              description="Глубина посадочного гнезда магнита, мм (3.1мм по ТЗ).")
+    add_input(tree, "Магнит_зазор_мм", "NodeSocketFloat", default=0.1, min_value=0.0, max_value=1.0,
+              description="Зазор по радиусу гнезда магнита (0.1мм по ТЗ -> гнездо Ø10.2мм "
+                           "при магните Ø10мм).")
     add_input(tree, "Зенковка_радиус_мм", "NodeSocketFloat", default=6.5, min_value=3.0, max_value=15.0)
     add_input(tree, "Зенковка_глубина_мм", "NodeSocketFloat", default=1.0, min_value=0.2, max_value=5.0)
+    add_input(tree, "Магнит_отверстие_мм", "NodeSocketFloat", default=4.0, min_value=3.0, max_value=6.0,
+              description="Диаметр центрального канала под винт М3, проходящего сквозь отверстие "
+                           "КОЛЬЦЕВОГО магнита (не сплошной диск), мм - по ТЗ 'магниты с "
+                           "отверстием по центру'.")
+    add_input(tree, "Магнит_гайка_диаметр_мм", "NodeSocketFloat", default=4.2, min_value=3.8, max_value=5.0,
+              description="Диаметр пилотного отверстия под вплавляемую гайку М3 (только male/зад), "
+                           "мм (Ø4.2мм по ТЗ).")
+    add_input(tree, "Магнит_гайка_глубина_мм", "NodeSocketFloat", default=5.5, min_value=3.0, max_value=8.0,
+              description="Глубина пилотного отверстия под гайку М3 (только male/зад), мм "
+                           "(5.5мм по ТЗ).")
     add_input(tree, "Ребро_толщина_мм", "NodeSocketFloat", default=2.0, min_value=0.0, max_value=6.0,
               description="Толщина опционального ребра жёсткости (0 = без ребра).")
     add_input(tree, "Стена_нахлёст_мм", "NodeSocketFloat", default=2.0, min_value=0.5, max_value=5.0,
@@ -572,8 +590,143 @@ def build_magnet_insert():
         [rib_cube, rib_h, ribsize, rib_sc, rib_align, rib_xf, rib_on, empty_rib, rib_sw,
          boss_plus_rib, boss_rib_merge])
 
+    # ------------------------------------------------------------------
+    # G. КАНАЛ ПОД ВИНТ М3 СКВОЗЬ ОТВЕРСТИЕ КОЛЬЦЕВОГО МАГНИТА + ГАЙКА
+    # (только male/зад): по ТЗ магнит - кольцевой (с отверстием по
+    # центру), крепится на винт М3, который проходит сквозь это
+    # отверстие, через тело конуса, и вкручивается в гайку М3,
+    # вплавляемую с ОБРАТНОЙ (внутренней) стороны. Канал сверлится на
+    # ОБЕИХ сторонах (male и female) - у female магнит клеевой, но
+    # спецификация также допускает, что тот же винт "дополнительно
+    # стягивает" обе половины через отверстие магнита (п.2 ТЗ про
+    # переднюю закладную) - поэтому канал есть и там, просто без гайки.
+    # Гайка садится у ШИРОКОГО торца: якорь конуса утоплен в стену лишь
+    # частично (см. 'Стена_нахлёст_мм' в самом начале) - центр широкого
+    # торца остаётся открытым в полость накладки, гайку можно вплавить
+    # оттуда до того, как накладка надета.
+    # ------------------------------------------------------------------
+    screw_r = add_node(tree, "ShaderNodeMath", "4e.49", "R_канала = Магнит_отверстие/2",
+                        150, -1850, operation='DIVIDE')
+    tree.links.new(GI("Магнит_отверстие_мм"), in_sock(screw_r, "Value"))
+    in_sock(screw_r, "Value_001").default_value = 2.0
+
+    # Канал прострелен НА 1мм ЗА ОБА торца (у якоря depth=0 и у дна
+    # гнезда магнита), а не точно вровень с ними - та же причина, что и
+    # у гайки ниже (копланарность/касание граней Boolean-решателю не
+    # нравится, нужно настоящее пересечение объёмов с обеих сторон).
+    screw_len = add_node(tree, "ShaderNodeMath", "4e.50",
+                          "длина канала = Длина + Магнит_глубина + 2мм (прострел с обеих сторон)",
+                          400, -1900, operation='ADD')
+    tree.links.new(GI("Длина_бобышки_мм"), in_sock(screw_len, "Value"))
+    screw_len_b = add_node(tree, "ShaderNodeMath", "4e.50b", "Магнит_глубина+2мм", 150, -1950,
+                            operation='ADD')
+    tree.links.new(GI("Магнит_глубина_мм"), in_sock(screw_len_b, "Value"))
+    in_sock(screw_len_b, "Value_001").default_value = 2.0
+    link(tree, screw_len_b, "Value", screw_len, "Value_001")
+
+    screw_cyl = add_node(tree, "GeometryNodeMeshCylinder", "4e.51",
+                          "канал под винт (сквозь весь конус + гнездо магнита)",
+                          900, -1850, fill_type='NGON')
+    link(tree, screw_r, "Value", screw_cyl, "Radius")
+    link(tree, screw_len, "Value", screw_cyl, "Depth")
+    screw_halflen0 = add_node(tree, "ShaderNodeMath", "4e.52b", "длина_канала/2", 650, -1970,
+                               operation='MULTIPLY')
+    link(tree, screw_len, "Value", screw_halflen0, "Value")
+    in_sock(screw_halflen0, "Value_001").default_value = 0.5
+    screw_halflen = add_node(tree, "ShaderNodeMath", "4e.52", "длина_канала/2 - 1мм (центр смещён "
+                              "назад -> прострел за якорь с ближней стороны)", 650, -2000,
+                              operation='SUBTRACT')
+    link(tree, screw_halflen0, "Value", screw_halflen, "Value")
+    in_sock(screw_halflen, "Value_001").default_value = 1.0
+    screw_center = along("4e.53", "центр канала (длина_канала/2 - 1мм внутрь от якоря)", 400, -2050,
+                          out_sock(screw_halflen, "Value"))
+    screw_xf = add_node(tree, "GeometryNodeTransform", "4e.54", "канал на место", 1500, -1850)
+    link(tree, screw_cyl, "Mesh", screw_xf, "Geometry")
+    link(tree, align, "Rotation", screw_xf, "Rotation")
+    link(tree, screw_center, "Vector", screw_xf, "Translation")
+
+    nut_r2 = add_node(tree, "ShaderNodeMath", "4e.55", "R_гайки = Магнит_гайка_диаметр/2",
+                       150, -2200, operation='DIVIDE')
+    tree.links.new(GI("Магнит_гайка_диаметр_мм"), in_sock(nut_r2, "Value"))
+    in_sock(nut_r2, "Value_001").default_value = 2.0
+    nut_cyl2 = add_node(tree, "GeometryNodeMeshCylinder", "4e.56",
+                         "пилотное отверстие под гайку М3 (male, у широкого торца)",
+                         900, -2200, fill_type='NGON')
+    link(tree, nut_r2, "Value", nut_cyl2, "Radius")
+    tree.links.new(GI("Магнит_гайка_глубина_мм"), in_sock(nut_cyl2, "Depth"))
+    # ВАЖНО: центр гайки смещён так, чтобы её открытая грань выходила
+    # НА 1мм ЗА пределы плоского основания конуса (depth<0), а не точно
+    # вровень с ним (depth=0) - иначе открытая грань гайки оказывается
+    # РОВНО в одной плоскости с плоским основанием конуса (torec
+    # касание/копланарность), а этот проект уже не раз находил, что
+    # точно копланарные/касательные грани дают дырявые края у Boolean-
+    # решателя (тот же урок, что и с касательной осью бобышек, см.
+    # выше). Небольшой прострел за пределы основания даёт настоящее
+    # (не касательное) пересечение объёмов.
+    nut_halfdepth2 = add_node(tree, "ShaderNodeMath", "4e.57", "глубина_гайки/2 - 1мм (прострел)",
+                               650, -2250, operation='SUBTRACT')
+    nut_halfdepth2_raw = add_node(tree, "ShaderNodeMath", "4e.57b", "глубина_гайки/2", 400, -2200,
+                                   operation='MULTIPLY')
+    tree.links.new(GI("Магнит_гайка_глубина_мм"), in_sock(nut_halfdepth2_raw, "Value"))
+    in_sock(nut_halfdepth2_raw, "Value_001").default_value = 0.5
+    link(tree, nut_halfdepth2_raw, "Value", nut_halfdepth2, "Value")
+    in_sock(nut_halfdepth2, "Value_001").default_value = 1.0
+    nut_center2 = along("4e.58", "центр гайки (глубина_гайки/2 - 1мм внутрь от якоря)",
+                         400, -2300, out_sock(nut_halfdepth2, "Value"))
+    nut_xf2 = add_node(tree, "GeometryNodeTransform", "4e.59", "гайка на место", 1500, -2200)
+    link(tree, nut_cyl2, "Mesh", nut_xf2, "Geometry")
+    link(tree, align, "Rotation", nut_xf2, "Rotation")
+    link(tree, nut_center2, "Vector", nut_xf2, "Translation")
+
+    nut_empty = add_node(tree, "GeometryNodeMeshCube", "4e.60", "пусто (female - без гайки)",
+                          900, -2400)
+    in_sock(nut_empty, "Size").default_value = (0.0, 0.0, 0.0)
+    nut_sw2 = add_node(tree, "GeometryNodeSwitch", "4e.61", "male? гайка", 1800, -2300,
+                        input_type='GEOMETRY')
+    link(tree, male_cmp, "Result", nut_sw2, "Switch_001")
+    link(tree, nut_empty, "Mesh", nut_sw2, "False_006")
+    link(tree, nut_xf2, "Geometry", nut_sw2, "True_006")
+
+    # ВАЖНО: канал под винт и гайка ГЛУБОКО ОБЪЁМНО ПЕРЕСЕКАЮТСЯ (гайка
+    # Ø4.2мм шире и вложена внутрь диапазона канала Ø4.0мм, а не просто
+    # КАСАЕТСЯ его по одной общей грани, как карман+зенковка/воронка+
+    # карман выше) - здесь нужен настоящий CSG UNION, а не Join+Merge By
+    # Distance (тот сваривает только СОВПАДАЮЩИЕ вершины на общей грани
+    # двух КАСАЮЩИХСЯ тел, а не переплетённые объёмы - тот же урок,
+    # что и при правке треугольного гребня в Группе 5).
+    screw_nut_union0 = add_node(tree, "GeometryNodeMeshBoolean", "4e.62",
+                                 "канал под винт UNION гайка (male) / только канал (female)",
+                                 2100, -1950, operation='UNION')
+    tree.links.new(screw_xf.outputs["Geometry"], in_sock(screw_nut_union0, "Mesh 2"))
+    tree.links.new(out_sock(nut_sw2, "Output_006"), in_sock(screw_nut_union0, "Mesh 2"))
+    screw_nut_union = add_node(tree, "GeometryNodeMergeByDistance", "4e.62m",
+                                "сварить после UNION (0.02мм) - стандартная страховка проекта",
+                                2350, -1950)
+    link(tree, screw_nut_union0, "Mesh", screw_nut_union, "Geometry")
+    in_sock(screw_nut_union, "Distance").default_value = 0.02
+
+    frameG = make_frame(
+        tree, "G. КАНАЛ ПОД ВИНТ М3 (сквозь отверстие кольцевого магнита, обе стороны) + "
+        "ГАЙКА М3 у широкого торца (только male/зад)",
+        [screw_r, screw_len, screw_len_b, screw_cyl, screw_halflen0, screw_halflen, screw_center, screw_xf,
+         nut_r2, nut_cyl2, nut_halfdepth2_raw, nut_halfdepth2, nut_center2, nut_xf2, nut_empty, nut_sw2,
+         screw_nut_union0, screw_nut_union])
+
+    # То же самое: канал под винт проходит НАСКВОЗЬ через весь карман
+    # магнита/зенковку/воронку (глубокое объёмное пересечение, не
+    # касание) - тоже настоящий UNION, не Join+Merge.
+    hole_final_union0 = add_node(tree, "GeometryNodeMeshBoolean", "4e.63",
+                                  "отверстие(карман+зенковка/воронка) UNION канал+гайка",
+                                  2600, -1150, operation='UNION')
+    tree.links.new(out_sock(hole_sw, "Output_006"), in_sock(hole_final_union0, "Mesh 2"))
+    tree.links.new(screw_nut_union.outputs["Geometry"], in_sock(hole_final_union0, "Mesh 2"))
+    hole_final_union = add_node(tree, "GeometryNodeMergeByDistance", "4e.63m",
+                                 "сварить после UNION (0.02мм)", 2850, -1150)
+    link(tree, hole_final_union0, "Mesh", hole_final_union, "Geometry")
+    in_sock(hole_final_union, "Distance").default_value = 0.02
+
     tree.links.new(boss_rib_merge.outputs["Geometry"], gout.inputs["Бобышка"])
-    tree.links.new(out_sock(hole_sw, "Output_006"), gout.inputs["Отверстие"])
+    tree.links.new(hole_final_union.outputs["Geometry"], gout.inputs["Отверстие"])
     return tree
 
 
@@ -1047,18 +1200,36 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
               min_value=0.0, max_value=5.0,
               description="Зазор между стойкой и концом хомута - место под шайбы.")
 
-    add_input(tree, "Магнит_диаметр_мм", "NodeSocketFloat", default=10.0, min_value=8.0, max_value=12.0)
-    add_input(tree, "Магнит_глубина_мм", "NodeSocketFloat", default=3.0, min_value=2.0, max_value=6.0)
-    add_input(tree, "Магнит_зазор_мм", "NodeSocketFloat", default=0.2, min_value=0.0, max_value=0.5)
-    add_input(tree, "Магнит1_высота_доля_от_колена", "NodeSocketFloat", default=0.25,
-              min_value=0.0, max_value=1.0)
-    add_input(tree, "Магнит2_высота_доля_от_колена", "NodeSocketFloat", default=0.70,
-              min_value=0.0, max_value=1.0)
-    add_input(tree, "Закладная_радиус_мм", "NodeSocketFloat", default=9.0, min_value=5.0, max_value=20.0,
-              description="Радиус закладной у стены (широкий торец male-конуса).")
-    add_input(tree, "Закладная_длина_мм", "NodeSocketFloat", default=14.0, min_value=6.0, max_value=30.0,
-              description="Длина закладной внутрь от стены.")
-    add_input(tree, "Закладная_кончик_радиус_мм", "NodeSocketFloat", default=6.0, min_value=3.0, max_value=15.0)
+    add_input(tree, "Магнит_диаметр_мм", "NodeSocketFloat", default=10.0, min_value=8.0, max_value=12.0,
+              description="Диаметр кольцевого магнита, мм (Ø10мм по ТЗ - кольцевой, с отверстием "
+                           "по центру, не сплошной диск).")
+    add_input(tree, "Магнит_глубина_мм", "NodeSocketFloat", default=3.1, min_value=2.0, max_value=6.0,
+              description="Толщина магнита / глубина гнезда, мм (3.1мм по ТЗ: магнит 3мм + 0.1мм).")
+    add_input(tree, "Магнит_зазор_мм", "NodeSocketFloat", default=0.1, min_value=0.0, max_value=0.5,
+              description="Зазор по радиусу гнезда (0.1мм по ТЗ -> гнездо Ø10.2мм).")
+    add_input(tree, "Магнит_отверстие_мм", "NodeSocketFloat", default=4.0, min_value=3.0, max_value=6.0,
+              description="Диаметр канала под винт М3 сквозь отверстие кольцевого магнита, мм.")
+    add_input(tree, "Магнит_гайка_диаметр_мм", "NodeSocketFloat", default=4.2, min_value=3.8, max_value=5.0,
+              description="Диаметр пилотного отверстия под вплавляемую гайку М3 (задняя/винтовая "
+                           "закладная), мм (Ø4.2мм по ТЗ).")
+    add_input(tree, "Магнит_гайка_глубина_мм", "NodeSocketFloat", default=5.5, min_value=3.0, max_value=8.0,
+              description="Глубина пилотного отверстия под гайку М3, мм (5.5мм по ТЗ).")
+    add_input(tree, "Магнит1_высота_доля_от_колена", "NodeSocketFloat", default=0.35,
+              min_value=0.0, max_value=1.0,
+              description="1-я высота размещения магнитов по Factor вдоль оси (0.35 по ТЗ).")
+    add_input(tree, "Магнит2_высота_доля_от_колена", "NodeSocketFloat", default=0.65,
+              min_value=0.0, max_value=1.0,
+              description="2-я высота размещения магнитов по Factor вдоль оси (0.65 по ТЗ).")
+    add_input(tree, "Магнит3_высота_доля_от_колена", "NodeSocketFloat", default=0.50,
+              min_value=0.0, max_value=1.0,
+              description="3-я высота (добавлена сверх ТЗ, чтобы выйти на 4-6 закладных на "
+                           "половину - см. примечание в docs про Factor x угол).")
+    add_input(tree, "Закладная_радиус_мм", "NodeSocketFloat", default=8.5, min_value=6.0, max_value=12.0,
+              description="Радиус закладной у стены (широкий торец male-конуса, Ø16-18мм по ТЗ).")
+    add_input(tree, "Закладная_длина_мм", "NodeSocketFloat", default=7.0, min_value=4.0, max_value=12.0,
+              description="Длина закладной внутрь от стены (высота конуса, 6-8мм по ТЗ).")
+    add_input(tree, "Закладная_кончик_радиус_мм", "NodeSocketFloat", default=6.0, min_value=5.5, max_value=15.0,
+              description="Радиус узкого торца (посадка магнита), >=Ø11мм по ТЗ.")
     add_input(tree, "Закладная_посадка_зазор_мм", "NodeSocketFloat", default=0.3, min_value=0.1, max_value=1.0)
     add_input(tree, "Зенковка_радиус_мм", "NodeSocketFloat", default=6.5, min_value=3.0, max_value=15.0)
     add_input(tree, "Зенковка_глубина_мм", "NodeSocketFloat", default=1.0, min_value=0.2, max_value=5.0)
@@ -1167,6 +1338,7 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
 
     row1_nodes, row1_i = ring_row("4.06", "row", -200, 250, "Магнит1_высота_доля_от_колена")
     row2_nodes, row2_i = ring_row("4.07", "row", -200, 400, "Магнит2_высота_доля_от_колена")
+    row3_nodes, row3_i = ring_row("4.07c", "row", -200, 550, "Магнит3_высота_доля_от_колена")
 
     def sample_seam(num, label, x, y, row_i_node, col_val):
         s = _grp(tree, sampler_tree, num, label, x, y)
@@ -1217,11 +1389,15 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     seamB_h1_nodes, seamB_h1, seamB_h1_dir = sample_seam("4.09", "шов2(col M/2) высота1", 400, 700, row1_i, mhalf_i)
     seamA_h2_nodes, seamA_h2, seamA_h2_dir = sample_seam("4.10", "шов1(col0) высота2", 400, 500, row2_i, 0)
     seamB_h2_nodes, seamB_h2, seamB_h2_dir = sample_seam("4.11", "шов2(col M/2) высота2", 400, 300, row2_i, mhalf_i)
+    seamA_h3_nodes, seamA_h3, seamA_h3_dir = sample_seam("4.11c", "шов1(col0) высота3", 400, 150, row3_i, 0)
+    seamB_h3_nodes, seamB_h3, seamB_h3_dir = sample_seam("4.11d", "шов2(col M/2) высота3", 400, 0, row3_i, mhalf_i)
 
     frame2 = make_frame(
-        tree, "2. ПОЗИЦИИ 4 МАГНИТНЫХ ТОЧЕК (2 шва x 2 высоты), сэмплировано с Профиль_точки",
-        [mhalf, mhalf_i, nm1] + row1_nodes + row2_nodes +
-        seamA_h1_nodes + seamB_h1_nodes + seamA_h2_nodes + seamB_h2_nodes)
+        tree, "2. ПОЗИЦИИ 6 МАГНИТНЫХ ТОЧЕК (2 шва x 3 высоты - см. docs про Factor x угол "
+        "и почему магниты остаются у швов), сэмплировано с Профиль_точки",
+        [mhalf, mhalf_i, nm1] + row1_nodes + row2_nodes + row3_nodes +
+        seamA_h1_nodes + seamB_h1_nodes + seamA_h2_nodes + seamB_h2_nodes +
+        seamA_h3_nodes + seamB_h3_nodes)
 
     # ------------------------------------------------------------------
     # 3. КОРОТКАЯ НАКЛАДКА? (по длине сегмента) - если да, из 4 позиций
@@ -1319,11 +1495,13 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     len_nodes_b1, safelen_b1 = safe_length("4.13lb", 400, -1000, seamB_h1, seamB_h1_dir)
     len_nodes_a2, safelen_a2 = safe_length("4.13lc", 400, -1300, seamA_h2, seamA_h2_dir)
     len_nodes_b2, safelen_b2 = safe_length("4.13ld", 400, -1600, seamB_h2, seamB_h2_dir)
+    len_nodes_a3, safelen_a3 = safe_length("4.13le", 400, -1900, seamA_h3, seamA_h3_dir)
+    len_nodes_b3, safelen_b3 = safe_length("4.13lf", 400, -2200, seamB_h3, seamB_h3_dir)
 
     frame3len = make_frame(
         tree, "3c. БЕЗОПАСНАЯ ДЛИНА ЗАКЛАДНОЙ (Raycast до стены Перед вдоль Оси, не даёт "
         "закладной 'прострелить' стенку на узких участках)",
-        len_nodes_a1 + len_nodes_b1 + len_nodes_a2 + len_nodes_b2)
+        len_nodes_a1 + len_nodes_b1 + len_nodes_a2 + len_nodes_b2 + len_nodes_a3 + len_nodes_b3)
 
     # ------------------------------------------------------------------
     # 3b. ЗАКЛАДНЫЕ МАГНИТОВ: Перед=female (воронка+магнит на дне),
@@ -1341,6 +1519,9 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
         tree.links.new(GI("Магнит_диаметр_мм"), g.inputs["Магнит_диаметр_мм"])
         tree.links.new(GI("Магнит_глубина_мм"), g.inputs["Магнит_глубина_мм"])
         tree.links.new(GI("Магнит_зазор_мм"), g.inputs["Магнит_зазор_мм"])
+        tree.links.new(GI("Магнит_отверстие_мм"), g.inputs["Магнит_отверстие_мм"])
+        tree.links.new(GI("Магнит_гайка_диаметр_мм"), g.inputs["Магнит_гайка_диаметр_мм"])
+        tree.links.new(GI("Магнит_гайка_глубина_мм"), g.inputs["Магнит_гайка_глубина_мм"])
         tree.links.new(GI("Зенковка_радиус_мм"), g.inputs["Зенковка_радиус_мм"])
         tree.links.new(GI("Зенковка_глубина_мм"), g.inputs["Зенковка_глубина_мм"])
         tree.links.new(GI("Закладная_ребро_мм"), g.inputs["Ребро_толщина_мм"])
@@ -1378,16 +1559,26 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
                                                 1300, -50, seamA_h2, seamA_h2_dir, 1.0, True, safelen_a2)
     mag_back_4_b, mag_back_4_h = magnet_insert("4.21", "магнит зад(male): шов2 высота2",
                                                 1300, -200, seamB_h2, seamB_h2_dir, 1.0, True, safelen_b2)
+    mag_front_5_b, mag_front_5_h = magnet_insert("4.21c", "магнит перед(female): шов1 высота3",
+                                                  1300, 350, seamA_h3, seamA_h3_dir, 0.0, True, safelen_a3)
+    mag_front_6_b, mag_front_6_h = magnet_insert("4.21d", "магнит перед(female): шов2 высота3",
+                                                  1300, 200, seamB_h3, seamB_h3_dir, 0.0, True, safelen_b3)
+    mag_back_5_b, mag_back_5_h = magnet_insert("4.21e", "магнит зад(male): шов1 высота3",
+                                                1300, -350, seamA_h3, seamA_h3_dir, 1.0, True, safelen_a3)
+    mag_back_6_b, mag_back_6_h = magnet_insert("4.21f", "магнит зад(male): шов2 высота3",
+                                                1300, -500, seamB_h3, seamB_h3_dir, 1.0, True, safelen_b3)
 
     frame3b = make_frame(
-        tree, "3b. 8 ЗАКЛАДНЫХ МАГНИТОВ (4 female на Перед, 4 male на Зад; "
-        "3 из 4 на половину гасятся при короткой накладке)",
+        tree, "3b. 12 ЗАКЛАДНЫХ МАГНИТОВ (6 female на Перед, 6 male на Зад - 2 шва x 3 высоты; "
+        "5 из 6 на половину гасятся при короткой накладке)",
         [mag_front_1_b.node, mag_front_2_b.node, mag_front_3_b.node, mag_front_4_b.node,
-         mag_back_1_b.node, mag_back_2_b.node, mag_back_3_b.node, mag_back_4_b.node])
+         mag_front_5_b.node, mag_front_6_b.node,
+         mag_back_1_b.node, mag_back_2_b.node, mag_back_3_b.node, mag_back_4_b.node,
+         mag_back_5_b.node, mag_back_6_b.node])
 
     # -- сборка: перед --
     jbf = add_node(tree, "GeometryNodeJoinGeometry", "4.22", "бобышки магнитов (перед)", 1700, 750)
-    for s in (mag_front_1_b, mag_front_2_b, mag_front_3_b, mag_front_4_b):
+    for s in (mag_front_1_b, mag_front_2_b, mag_front_3_b, mag_front_4_b, mag_front_5_b, mag_front_6_b):
         tree.links.new(s, jbf.inputs["Geometry"])
 
     uf = add_node(tree, "GeometryNodeMeshBoolean", "4.23",
@@ -1396,7 +1587,7 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     tree.links.new(jbf.outputs["Geometry"], in_sock(uf, "Mesh 2"))
 
     jhf = add_node(tree, "GeometryNodeJoinGeometry", "4.24", "гнёзда магнитов (перед)", 1700, 600)
-    for s in (mag_front_1_h, mag_front_2_h, mag_front_3_h, mag_front_4_h):
+    for s in (mag_front_1_h, mag_front_2_h, mag_front_3_h, mag_front_4_h, mag_front_5_h, mag_front_6_h):
         tree.links.new(s, jhf.inputs["Geometry"])
 
     df = add_node(tree, "GeometryNodeMeshBoolean", "4.25",
@@ -1406,7 +1597,7 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
 
     # -- сборка: зад --
     jbb = add_node(tree, "GeometryNodeJoinGeometry", "4.26", "бобышки магнитов (зад)", 1700, 200)
-    for s in (mag_back_1_b, mag_back_2_b, mag_back_3_b, mag_back_4_b):
+    for s in (mag_back_1_b, mag_back_2_b, mag_back_3_b, mag_back_4_b, mag_back_5_b, mag_back_6_b):
         tree.links.new(s, jbb.inputs["Geometry"])
 
     ub = add_node(tree, "GeometryNodeMeshBoolean", "4.27",
@@ -1415,7 +1606,7 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     tree.links.new(jbb.outputs["Geometry"], in_sock(ub, "Mesh 2"))
 
     jhb = add_node(tree, "GeometryNodeJoinGeometry", "4.28", "гнёзда магнитов (зад)", 1700, 50)
-    for s in (mag_back_1_h, mag_back_2_h, mag_back_3_h, mag_back_4_h):
+    for s in (mag_back_1_h, mag_back_2_h, mag_back_3_h, mag_back_4_h, mag_back_5_h, mag_back_6_h):
         tree.links.new(s, jhb.inputs["Geometry"])
 
     db = add_node(tree, "GeometryNodeMeshBoolean", "4.29",
@@ -1490,6 +1681,8 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     clr_nodes2, clr2 = dist_to_axis_line("4.51", 400, -1000, seamB_h1, seamB_h1_dir)
     clr_nodes3, clr3 = dist_to_axis_line("4.52", 400, -1300, seamA_h2, seamA_h2_dir)
     clr_nodes4, clr4 = dist_to_axis_line("4.53", 400, -1600, seamB_h2, seamB_h2_dir)
+    clr_nodes5, clr5 = dist_to_axis_line("4.53c", 400, -1900, seamA_h3, seamA_h3_dir)
+    clr_nodes6, clr6 = dist_to_axis_line("4.53d", 400, -2200, seamB_h3, seamB_h3_dir)
 
     min12 = add_node(tree, "ShaderNodeMath", "4.54a", "min(d1,d2)", 2400, -700, operation='MINIMUM')
     link(tree, clr1, "Value", min12, "Value")
@@ -1497,10 +1690,17 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
     min34 = add_node(tree, "ShaderNodeMath", "4.54b", "min(d3,d4)", 2400, -900, operation='MINIMUM')
     link(tree, clr3, "Value", min34, "Value")
     link(tree, clr4, "Value", min34, "Value_001")
-    min_dist = add_node(tree, "ShaderNodeMath", "4.54c", "min_расст = min(min12,min34)",
-                         2660, -800, operation='MINIMUM')
-    link(tree, min12, "Value", min_dist, "Value")
-    link(tree, min34, "Value", min_dist, "Value_001")
+    min56 = add_node(tree, "ShaderNodeMath", "4.54d", "min(d5,d6)", 2400, -1100, operation='MINIMUM')
+    link(tree, clr5, "Value", min56, "Value")
+    link(tree, clr6, "Value", min56, "Value_001")
+    min1234 = add_node(tree, "ShaderNodeMath", "4.54e", "min(min12,min34)",
+                        2660, -800, operation='MINIMUM')
+    link(tree, min12, "Value", min1234, "Value")
+    link(tree, min34, "Value", min1234, "Value_001")
+    min_dist = add_node(tree, "ShaderNodeMath", "4.54c", "min_расст = min(min1234,min56)",
+                         2920, -900, operation='MINIMUM')
+    link(tree, min1234, "Value", min_dist, "Value")
+    link(tree, min56, "Value", min_dist, "Value_001")
 
     tube_r = add_node(tree, "ShaderNodeMath", "4.55", "R_трубки = Трубка_диаметр/2",
                        2400, -1050, operation='DIVIDE')
@@ -1515,8 +1715,8 @@ def build_inserts(boss_tree, clamp_tree, sampler_tree, magnet_tree):
 
     frame4b = make_frame(
         tree, "4b. ПРОВЕРКА: закладные магнитов не мешают проходу трубки (>= R_трубки от оси A-B)",
-        clr_nodes1 + clr_nodes2 + clr_nodes3 + clr_nodes4 +
-        [min12, min34, min_dist, tube_r, clr_ok])
+        clr_nodes1 + clr_nodes2 + clr_nodes3 + clr_nodes4 + clr_nodes5 + clr_nodes6 +
+        [min12, min34, min56, min1234, min_dist, tube_r, clr_ok])
 
     # ------------------------------------------------------------------
     # 5. ИТОГ: VIS, проверки, отчёт
