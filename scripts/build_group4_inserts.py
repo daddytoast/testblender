@@ -591,21 +591,34 @@ def build_clamp(boss_tree):
     add_input(tree, "Трубка_диаметр_мм", "NodeSocketFloat", default=25.0,
               min_value=16.0, max_value=35.0)
     add_input(tree, "Хомут_толщина_мм", "NodeSocketFloat", default=3.5,
-              min_value=2.5, max_value=6.0)
-    add_input(tree, "Хомут_высота_мм", "NodeSocketFloat", default=14.0,
-              min_value=8.0, max_value=25.0)
+              min_value=3.0, max_value=4.0,
+              description="Толщина стенки полукольца хомута, мм (3-4мм по ТЗ).")
+    add_input(tree, "Хомут_высота_мм", "NodeSocketFloat", default=13.0,
+              min_value=10.0, max_value=15.0,
+              description="Высота полукольца хомута, мм (10-15мм по ТЗ).")
+    add_input(tree, "Хомут_зазор_трубка_мм", "NodeSocketFloat", default=0.5,
+              min_value=0.0, max_value=2.0,
+              description="Радиальный зазор между внутренней стенкой хомута и трубкой протеза, "
+                           "мм (посадочный зазор, чтобы хомут не давил на трубку напрямую).")
     add_input(tree, "Гайка_диаметр_мм", "NodeSocketFloat", default=4.0,
               min_value=3.6, max_value=4.6)
     add_input(tree, "Гайка_глубина_мм", "NodeSocketFloat", default=5.0,
               min_value=3.0, max_value=8.0)
-    add_input(tree, "Винт_зазор_диаметр_мм", "NodeSocketFloat", default=3.4,
-              min_value=3.2, max_value=3.8)
+    add_input(tree, "Винт_зазор_диаметр_мм", "NodeSocketFloat", default=3.2,
+              min_value=3.2, max_value=3.8,
+              description="Диаметр сквозного отверстия под винт М3, мм (Ø3.2мм по ТЗ).")
     add_input(tree, "Стойка_радиус_мм", "NodeSocketFloat", default=5.5, min_value=3.5, max_value=10.0,
               description="Радиус закладной-стойки под гайку на внутренней стороне передней панели.")
     add_input(tree, "Хомут_зазор_под_шайбы_мм", "NodeSocketFloat", default=1.5,
               min_value=0.0, max_value=5.0,
               description="Зазор между стойкой (на стене) и концом хомута - место под шайбы "
                            "для тонкой корректировки позиционирования.")
+    add_input(tree, "Хомут_галтель_мм", "NodeSocketFloat", default=2.0,
+              min_value=1.5, max_value=2.5,
+              description="Радиус сопряжения (галтели) между ушком под винт и телом полукольца - "
+                           "приближено 'шариком' сглаживания в корне ушка (в Blender 4.0 GN нет "
+                           "узла Fillet для мешей, только для кривых - см. docs про это упрощение), "
+                           "убирает острый вогнутый угол-концентратор напряжений.")
     add_output(tree, "Перед", "NodeSocketGeometry")
     add_output(tree, "Зад", "NodeSocketGeometry")
 
@@ -633,26 +646,32 @@ def build_clamp(boss_tree):
                          [n02, n03])
 
     # -- радиусы --
-    n04 = add_node(tree, "ShaderNodeMath", "4a.04", "R_трубки = Трубка_диаметр/2",
+    n04 = add_node(tree, "ShaderNodeMath", "4a.04", "R_трубки = Трубка_диаметр/2 (номинал)",
                     -200, 350, operation='DIVIDE')
     tree.links.new(GI("Трубка_диаметр_мм"), in_sock(n04, "Value"))
     in_sock(n04, "Value_001").default_value = 2.0
 
-    n05 = add_node(tree, "ShaderNodeMath", "4a.05", "R_внеш = R_трубки + Хомут_толщина",
+    n04c = add_node(tree, "ShaderNodeMath", "4a.04c",
+                     "R_бора = R_трубки + Хомут_зазор_трубка_мм (посадочный зазор)",
+                     -200, 250, operation='ADD')
+    link(tree, n04, "Value", n04c, "Value")
+    tree.links.new(GI("Хомут_зазор_трубка_мм"), in_sock(n04c, "Value_001"))
+
+    n05 = add_node(tree, "ShaderNodeMath", "4a.05", "R_внеш = R_бора + Хомут_толщина",
                     100, 350, operation='ADD')
-    link(tree, n04, "Value", n05, "Value")
+    link(tree, n04c, "Value", n05, "Value")
     tree.links.new(GI("Хомут_толщина_мм"), in_sock(n05, "Value_001"))
 
-    n06 = add_node(tree, "ShaderNodeMath", "4a.06", "R_средний = R_трубки + Хомут_толщина/2",
+    n06 = add_node(tree, "ShaderNodeMath", "4a.06", "R_средний = R_бора + Хомут_толщина/2",
                     100, 200, operation='ADD')
-    link(tree, n04, "Value", n06, "Value")
+    link(tree, n04c, "Value", n06, "Value")
     n06h = add_node(tree, "ShaderNodeMath", "4a.06h", "Хомут_толщина/2", -200, 150, operation='MULTIPLY')
     tree.links.new(GI("Хомут_толщина_мм"), in_sock(n06h, "Value"))
     in_sock(n06h, "Value_001").default_value = 0.5
     link(tree, n06h, "Value", n06, "Value_001")
 
-    frame1 = make_frame(tree, "1. РАДИУСЫ (трубки, внешний, средний по стенке хомута)",
-                         [n04, n05, n06, n06h])
+    frame1 = make_frame(tree, "1. РАДИУСЫ (трубки, бора с зазором, внешний, средний по стенке хомута)",
+                         [n04, n04c, n05, n06, n06h])
 
     # -- труба-хомут (внешний минус внутренний цилиндр) --
     n07 = add_node(tree, "GeometryNodeMeshCylinder", "4a.07", "внешний цилиндр",
@@ -661,8 +680,9 @@ def build_clamp(boss_tree):
     tree.links.new(GI("Хомут_высота_мм"), in_sock(n07, "Depth"))
 
     n08 = add_node(tree, "GeometryNodeMeshCylinder", "4a.08", "внутренний цилиндр "
-                    "(чуть выше внешнего - чистое вычитание)", 400, 550, fill_type='NGON')
-    link(tree, n04, "Value", n08, "Radius")
+                    "(бор с зазором Хомут_зазор_трубка_мм, чуть выше внешнего - чистое вычитание)",
+                    400, 550, fill_type='NGON')
+    link(tree, n04c, "Value", n08, "Radius")
     n08h = add_node(tree, "ShaderNodeMath", "4a.08h", "Хомут_высота + 2мм", 100, 500, operation='ADD')
     tree.links.new(GI("Хомут_высота_мм"), in_sock(n08h, "Value"))
     in_sock(n08h, "Value_001").default_value = 2.0
@@ -803,6 +823,39 @@ def build_clamp(boss_tree):
                          [boss_r, boss_r2, g1, g2, g3, g4])
 
     # ------------------------------------------------------------------
+    # 5c. ГАЛТЕЛЬ (сопряжение) МЕЖДУ УШКОМ И ПОЛУКОЛЬЦОМ
+    # В Blender 4.0 Geometry Nodes нет узла скругления рёбер меша (только
+    # для кривых - FilletCurve, использован в Группе 5) - приближаем
+    # настоящую CAD-галтель "шариком" сглаживания: сфера радиусом
+    # (радиус_ушка + Хомут_галтель_мм), UNION-енная В ТОМ ЖЕ буллине,
+    # что и само ушко, в точке его крепления к полукольцу - заполняет
+    # вогнутый угол стыка (убирает концентратор напряжений), не доходя
+    # до дальнего (открытого) торца ушка длиной 12мм.
+    # ------------------------------------------------------------------
+    fillet_r = add_node(tree, "ShaderNodeMath", "4a.18e",
+                         "R_галтели = R_ушка + Хомут_галтель_мм", 650, -850, operation='ADD')
+    link(tree, boss_r2, "Value", fillet_r, "Value")
+    tree.links.new(GI("Хомут_галтель_мм"), in_sock(fillet_r, "Value_001"))
+
+    def fillet_ball(num, label, x, y, pos_node):
+        sph = add_node(tree, "GeometryNodeMeshUVSphere", num + "s", label, x, y)
+        link(tree, fillet_r, "Value", sph, "Radius")
+        xf = add_node(tree, "GeometryNodeTransform", num + "t", label + " на место", x + 260, y)
+        link(tree, sph, "Mesh", xf, "Geometry")
+        link(tree, pos_node, "Vector", xf, "Translation")
+        return xf, [sph, xf]
+
+    fb1, fb1_nodes = fillet_ball("4a.f1", "галтель (перед, конец1)", 1000, -800, n16)
+    fb2, fb2_nodes = fillet_ball("4a.f2", "галтель (перед, конец2)", 1000, -950, n17)
+    fb3, fb3_nodes = fillet_ball("4a.f3", "галтель (зад, конец1)", 1000, -1100, n16)
+    fb4, fb4_nodes = fillet_ball("4a.f4", "галтель (зад, конец2)", 1000, -1250, n17)
+
+    frame5c = make_frame(
+        tree, "5c. ГАЛТЕЛЬ УШКО<->ПОЛУКОЛЬЦО (приближение 'шариком' сглаживания - "
+        "в 4.0 GN нет узла скругления рёбер меша)",
+        [fillet_r] + fb1_nodes + fb2_nodes + fb3_nodes + fb4_nodes)
+
+    # ------------------------------------------------------------------
     # 5b. ЗАКЛАДНЫЕ-СТОЙКИ ПОД ГАЙКУ (только на передней части, с
     # внутренней стороны передней площадки, с рёбрами жёсткости к стене)
     # Хомут сам по себе НЕ касается внешней оболочки (он маленький, вокруг
@@ -893,11 +946,14 @@ def build_clamp(boss_tree):
         standoff1_nodes + standoff2_nodes)
 
     # -- сборка: перед --
-    j1 = add_node(tree, "GeometryNodeJoinGeometry", "4a.23", "бобышки перед + стойки-гайки", 1300, -50)
+    j1 = add_node(tree, "GeometryNodeJoinGeometry", "4a.23",
+                   "бобышки перед + стойки-гайки + галтели ушек", 1300, -50)
     tree.links.new(g1.outputs["Бобышка"], j1.inputs["Geometry"])
     tree.links.new(g2.outputs["Бобышка"], j1.inputs["Geometry"])
     tree.links.new(standoff1.outputs["Бобышка"], j1.inputs["Geometry"])
     tree.links.new(standoff2.outputs["Бобышка"], j1.inputs["Geometry"])
+    tree.links.new(fb1.outputs["Geometry"], j1.inputs["Geometry"])
+    tree.links.new(fb2.outputs["Geometry"], j1.inputs["Geometry"])
 
     u1 = add_node(tree, "GeometryNodeMeshBoolean", "4a.24",
                    "перед. половина трубы + бобышки", 1600, -50, operation='UNION')
@@ -925,9 +981,11 @@ def build_clamp(boss_tree):
                          [j1, u1, h1, d1, front_final])
 
     # -- сборка: зад --
-    j2 = add_node(tree, "GeometryNodeJoinGeometry", "4a.28", "бобышки зад", 1300, -450)
+    j2 = add_node(tree, "GeometryNodeJoinGeometry", "4a.28", "бобышки зад + галтели ушек", 1300, -450)
     tree.links.new(g3.outputs["Бобышка"], j2.inputs["Geometry"])
     tree.links.new(g4.outputs["Бобышка"], j2.inputs["Geometry"])
+    tree.links.new(fb3.outputs["Geometry"], j2.inputs["Geometry"])
+    tree.links.new(fb4.outputs["Geometry"], j2.inputs["Geometry"])
 
     u2 = add_node(tree, "GeometryNodeMeshBoolean", "4a.29",
                    "зад. половина трубы + бобышки", 1600, -450, operation='UNION')
