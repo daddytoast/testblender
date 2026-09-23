@@ -113,20 +113,35 @@ def build_cut(cap_tree):
     add_input(tree, "Точка_на_плоскости", "NodeSocketVector")
     add_input(tree, "Нормаль_плоскости", "NodeSocketVector", default=(0.0, 0.0, 1.0))
     add_input(tree, "Стык_вкл", "NodeSocketFloat", default=1.0, min_value=0.0, max_value=1.0,
-              description="1 = добавить треугольный гребень/впадину по ВСЕМУ периметру разреза "
-                           "(шпунтовое соединение); 0 = обычный плоский срез без гребня.")
-    add_input(tree, "Стык_высота_мм", "NodeSocketFloat", default=1.0, min_value=0.2, max_value=3.0,
-              description="Высота треугольного гребня по нормали к плоскости разреза, мм.")
-    add_input(tree, "Стык_угол_град", "NodeSocketFloat", default=60.0, min_value=20.0, max_value=100.0,
-              description="Угол при вершине треугольного профиля гребня (широкое основание, "
-                           "узкая вершина), градусы.")
+              description="1 = добавить шип/паз (трапециевидного или прямоугольного сечения) по "
+                           "периметру разреза; 0 = обычный плоский срез без шипа.")
+    add_input(tree, "Стык_высота_мм", "NodeSocketFloat", default=1.2, min_value=0.3, max_value=3.0,
+              description="Высота шипа по нормали к плоскости разреза, мм.")
+    add_input(tree, "Стык_ширина_мм", "NodeSocketFloat", default=2.0, min_value=0.5, max_value=6.0,
+              description="Ширина ОСНОВАНИЯ шипа (широкий конец, на плоскости среза), мм.")
+    add_input(tree, "Стык_скос_мм", "NodeSocketFloat", default=0.4, min_value=0.0, max_value=2.0,
+              description="На сколько мм УЖЕ узкий конец шипа с каждой стороны относительно "
+                           "основания - 0 = прямоугольное/квадратное сечение, >0 = трапециевидное "
+                           "(лёгкий скос для самоцентровки при сборке).")
     add_input(tree, "Стык_зазор_мм", "NodeSocketFloat", default=0.1, min_value=0.0, max_value=1.0,
-              description="Зазор впадина<->гребень (посадка под клей и допуски печати), мм.")
+              description="Зазор паз<->шип (посадка под клей и допуски печати), мм.")
     add_input(tree, "Кромка_радиус_мм", "NodeSocketFloat", default=0.2, min_value=0.05, max_value=1.0,
-              description="Скругление кромок треугольного профиля (основание и вершина), мм - "
-                           "приближение через Fillet Curve, единый радиус на весь профиль "
-                           "(отдельный радиус вершины 0.15мм из ТЗ не выделяется отдельно, т.к. "
-                           "обе величины меньше ширины линии сопла FDM ~0.4мм).")
+              description="Скругление углов сечения шипа, мм - приближение через Fillet Curve.")
+    add_input(tree, "Стык_сегменты_вкл", "NodeSocketFloat", default=0.0, min_value=0.0, max_value=1.0,
+              description="0 = шип/паз сплошной на всю длину грани разреза; 1 = прерывистый "
+                           "(чередование Стык_сегмент_мм шипа и Стык_промежуток_мм пропуска).")
+    add_input(tree, "Стык_сегмент_мм", "NodeSocketFloat", default=10.0, min_value=3.0, max_value=40.0,
+              description="Длина одного отрезка шипа/паза при прерывистом режиме, мм.")
+    add_input(tree, "Стык_промежуток_мм", "NodeSocketFloat", default=10.0, min_value=3.0, max_value=40.0,
+              description="Длина промежутка между отрезками при прерывистом режиме, мм.")
+    add_input(tree, "Стык_ребро_вкл", "NodeSocketFloat", default=0.0, min_value=0.0, max_value=1.0,
+              description="1 = добавить местное утолщение стенки (ребро жёсткости) вдоль шва с "
+                           "внутренней стороны каждой детали, для усиления соединения.")
+    add_input(tree, "Стык_ребро_высота_мм", "NodeSocketFloat", default=1.5, min_value=0.5, max_value=6.0,
+              description="Глубина утолщения (ребра) вовнутрь детали от плоскости среза, мм "
+                           "(небольшая - не должна приближаться к толщине стенки).")
+    add_input(tree, "Стык_ребро_ширина_мм", "NodeSocketFloat", default=3.0, min_value=1.5, max_value=10.0,
+              description="Ширина утолщения (ребра) поперёк шва, мм.")
     add_output(tree, "Часть_A", "NodeSocketGeometry", "Сторона, куда указывает нормаль.")
     add_output(tree, "Часть_B", "NodeSocketGeometry", "Противоположная сторона.")
 
@@ -278,209 +293,344 @@ def build_cut(cap_tree):
         "сам закрывает срез) -> кривая",
         [b01, b_d1, b_dot1, b_abs1, b_on1, b_d2, b_dot2, b_abs2, b_on2, b02, b03])
 
-    # -- треугольный профиль: MeshCircle(3 верш.) даёт равносторонний
-    # треугольник (вершина 0 = "апекс" наверху, 1,2 = основание) - меняем
-    # позиции по индексу на точный несимметричный профиль нужных
-    # размеров, затем скругляем углы (Fillet Curve).
-    # Экспериментально проверено (probe_curve2mesh.py): для Curve to
-    # Mesh с путём вдоль касательной T локальная ось профиля X ->
-    # ПОПЕРЕЧНОЕ (радиальное, в плоскости среза) направление, а
-    # локальная ось Y (со знаком МИНУС) -> направление НОРМАЛИ плоскости
-    # среза - т.е. апекс с отрицательным Y "выдавливается" в сторону
-    # normal_of_cut, а основание с Y=0 остаётся точно на плоскости среза.
-    def tri_profile(num_prefix, halfwidth_mm, height_mm, x, y, label_suffix=""):
-        circ = add_node(tree, "GeometryNodeMeshCircle", num_prefix + "a",
-                         "донор: равносторонний треугольник (3 верш.)" + label_suffix,
-                         x, y)
-        circ.fill_type = 'NONE'
-        in_sock(circ, "Vertices").default_value = 3
-        in_sock(circ, "Radius").default_value = 1.0
+    # -- трапециевидный/прямоугольный профиль шипа: используем встроенный
+    # примитив GeometryNodeCurvePrimitiveQuadrilateral (mode=TRAPEZOID),
+    # который в 5.1 напрямую даёт "Bottom Width"/"Top Width"/"Height" -
+    # НАМНОГО проще самодельного построения через MeshCircle, как было
+    # у прежнего треугольного профиля. Проверено отдельным тестом
+    # (probe): донор кладёт НИЗ (широкое основание) на Y=-height/2, ВЕРХ
+    # (узкий конец) на Y=+height/2, симметрично по X. Переворачиваем и
+    # сдвигаем в конвенцию проекта (см. комментарий выше про профиль X/Y
+    # у Curve to Mesh): основание -> Y=0 (на плоскости среза), узкий
+    # конец -> Y=-height (в сторону нормали разреза, "выдавливается" в
+    # соседнюю деталь). Скос=0 -> Top Width=Bottom Width -> прямоугольное
+    # (квадратное) сечение; скос>0 -> трапеция.
+    def trap_profile(num_prefix, base_w_socket, top_w_socket, height_socket, x, y, label_suffix=""):
+        quad = add_node(tree, "GeometryNodeCurvePrimitiveQuadrilateral", num_prefix + "q",
+                         "донор: трапеция/прямоугольник" + label_suffix, x, y, mode='TRAPEZOID')
+        tree.links.new(base_w_socket, in_sock(quad, "Bottom Width"))
+        tree.links.new(top_w_socket, in_sock(quad, "Top Width"))
+        tree.links.new(height_socket, in_sock(quad, "Height"))
+        in_sock(quad, "Offset").default_value = 0.0
 
-        idx = add_node(tree, "GeometryNodeInputIndex", num_prefix + "b", "индекс вершины",
-                        x, y - 150)
-        is_apex = add_node(tree, "FunctionNodeCompare", num_prefix + "c", "вершина 0 = апекс?",
-                            x + 200, y - 150, data_type='INT', operation='EQUAL')
-        link(tree, idx, "Index", is_apex, "A_INT")
-        in_sock(is_apex, "B_INT").default_value = 0
+        halfh = add_node(tree, "ShaderNodeMath", num_prefix + "hh", "height/2",
+                          x + 260, y - 150, operation='MULTIPLY')
+        tree.links.new(height_socket, in_sock(halfh, "Value"))
+        in_sock(halfh, "Value_001").default_value = 0.5
+        neg_halfh = add_node(tree, "ShaderNodeMath", num_prefix + "nh", "-height/2",
+                              x + 520, y - 150, operation='MULTIPLY')
+        link(tree, halfh, "Value", neg_halfh, "Value")
+        in_sock(neg_halfh, "Value_001").default_value = -1.0
+        tvec = add_node(tree, "ShaderNodeCombineXYZ", num_prefix + "tv",
+                         "смещение = (0,-height/2,0)", x + 780, y - 150)
+        link(tree, neg_halfh, "Value", tvec, "Y")
 
-        # ВАЖНО (эмпирически проверено, см. diag_g5g.py): 3-вершинный
-        # MeshCircle кладёт вершины на углах 0°/120°/240° - т.е. вершины
-        # 1 и 2 (основание) имеют ОДИНАКОВЫЙ знак X (обе -0.5), это НЕ
-        # зеркальная пара относительно X - поэтому знак берём не из
-        # исходной позиции донора, а прямо из ИНДЕКСА вершины
-        # (детерминировано, не зависит от условности раскладки круга):
-        # индекс1 -> -1, индекс2 -> +1 (апекс, индекс0, всё равно
-        # переопределяется отдельно ниже).
-        signraw = add_node(tree, "ShaderNodeMath", num_prefix + "sr",
-                            "index - 1.5", x + 200, y - 450, operation='SUBTRACT')
-        link(tree, idx, "Index", signraw, "Value")
-        in_sock(signraw, "Value_001").default_value = 1.5
-        sign = add_node(tree, "ShaderNodeMath", num_prefix + "sgn",
-                         "sign(index-1.5): индекс1->-1, индекс2->+1", x + 460, y - 450,
-                         operation='SIGN')
-        link(tree, signraw, "Value", sign, "Value")
-
-        newx = add_node(tree, "ShaderNodeMath", num_prefix + "nx", "новый X = sign(X)*halfwidth",
-                         x + 720, y - 450, operation='MULTIPLY')
-        link(tree, sign, "Value", newx, "Value")
-        in_sock(newx, "Value_001").default_value = halfwidth_mm
-
-        newy_base = add_node(tree, "ShaderNodeMath", num_prefix + "nyb",
-                              "новый Y (основание) = 0", x + 460, y - 600, operation='MULTIPLY')
-        in_sock(newy_base, "Value").default_value = 0.0
-        in_sock(newy_base, "Value_001").default_value = 0.0
-        newy_apex = add_node(tree, "ShaderNodeMath", num_prefix + "nya",
-                              "новый Y (апекс) = -height", x + 460, y - 700, operation='MULTIPLY')
-        in_sock(newy_apex, "Value").default_value = -1.0
-        in_sock(newy_apex, "Value_001").default_value = height_mm
-
-        newy = add_node(tree, "ShaderNodeMix", num_prefix + "ny", "Y = апекс?newy_apex:newy_base",
-                         x + 720, y - 600, data_type='FLOAT')
-        link(tree, is_apex, "Result", newy, "Factor_Float")
-        link(tree, newy_base, "Value", newy, "A_Float")
-        link(tree, newy_apex, "Value", newy, "B_Float")
-
-        newx_final = add_node(tree, "ShaderNodeMix", num_prefix + "nxf",
-                               "X = апекс?0:newx", x + 980, y - 450, data_type='FLOAT')
-        link(tree, is_apex, "Result", newx_final, "Factor_Float")
-        link(tree, newx, "Value", newx_final, "A_Float")
-        in_sock(newx_final, "B_Float").default_value = 0.0
-
-        combine = add_node(tree, "ShaderNodeCombineXYZ", num_prefix + "cxyz",
-                            "новая позиция (X,Y,0)", x + 1240, y - 500)
-        link(tree, newx_final, "Result_Float", combine, "X")
-        link(tree, newy, "Result_Float", combine, "Y")
-
-        setpos = add_node(tree, "GeometryNodeSetPosition", num_prefix + "sp",
-                           "записать новую позицию (профиль готов)", x + 1500, y - 300)
-        link(tree, circ, "Mesh", setpos, "Geometry")
-        link(tree, combine, "Vector", setpos, "Position")
-
-        curve = add_node(tree, "GeometryNodeMeshToCurve", num_prefix + "mc",
-                          "профиль-меш -> кривая (замкнутая)", x + 1760, y - 300)
-        link(tree, setpos, "Geometry", curve, "Mesh")
+        xf = add_node(tree, "GeometryNodeTransform", num_prefix + "xf",
+                       "перевернуть Y + сдвинуть (низ->Y=0, верх->Y=-height)" + label_suffix,
+                       x + 1040, y)
+        link(tree, quad, "Curve", xf, "Geometry")
+        in_sock(xf, "Scale").default_value = (1.0, -1.0, 1.0)
+        link(tree, tvec, "Vector", xf, "Translation")
 
         fillet = add_node(tree, "GeometryNodeFilletCurve", num_prefix + "fc",
-                           "скругление углов профиля" + label_suffix, x + 2020, y - 300,
-                           mode='POLY')
-        link(tree, curve, "Curve", fillet, "Curve")
+                           "скругление углов профиля" + label_suffix, x + 1300, y, mode='POLY')
+        link(tree, xf, "Geometry", fillet, "Curve")
         tree.links.new(GI("Кромка_радиус_мм"), in_sock(fillet, "Radius"))
-        in_sock(fillet, "Count").default_value = 4
+        in_sock(fillet, "Count").default_value = 3
 
-        nodes_list = [circ, idx, is_apex, signraw, sign, newx, newy_base,
-                      newy_apex, newy, newx_final, combine, setpos, curve, fillet]
+        nodes_list = [quad, halfh, neg_halfh, tvec, xf, fillet]
         return fillet, nodes_list
 
-    # ширина = height*tan(угол/2)*2 (полная), т.е. halfwidth = height*tan(угол/2)
-    halfw_rad = add_node(tree, "ShaderNodeMath", "5a.hw0", "угол/2 -> рад", 1600, -700,
-                          operation='RADIANS')
-    halfw_deg2 = add_node(tree, "ShaderNodeMath", "5a.hw0b", "угол/2", 1600, -600,
-                           operation='DIVIDE')
-    tree.links.new(GI("Стык_угол_град"), in_sock(halfw_deg2, "Value"))
-    in_sock(halfw_deg2, "Value_001").default_value = 2.0
-    link(tree, halfw_deg2, "Value", halfw_rad, "Value")
-    halfw_tan = add_node(tree, "ShaderNodeMath", "5a.hw1", "tan(угол/2)", 1860, -700,
-                          operation='TANGENT')
-    link(tree, halfw_rad, "Value", halfw_tan, "Value")
-    halfw_mm = add_node(tree, "ShaderNodeMath", "5a.hw2",
-                         "halfwidth_гребень_мм = высота * tan(угол/2)", 2120, -700,
-                         operation='MULTIPLY')
-    tree.links.new(GI("Стык_высота_мм"), in_sock(halfw_mm, "Value"))
-    link(tree, halfw_tan, "Value", halfw_mm, "Value_001")
+    # -- размеры: шип точный, паз = шип + зазор (по ширине с обеих
+    # сторон и по высоте) --
+    skew2 = add_node(tree, "ShaderNodeMath", "5a.sk2", "Стык_скос_мм * 2",
+                      1600, -600, operation='MULTIPLY')
+    tree.links.new(GI("Стык_скос_мм"), in_sock(skew2, "Value"))
+    in_sock(skew2, "Value_001").default_value = 2.0
 
-    # впадина крупнее гребня на зазор (по ширине и по высоте) - гребень
-    # входит с зазором Стык_зазор_мм со всех сторон.
-    halfw_groove = add_node(tree, "ShaderNodeMath", "5a.hw3",
-                             "halfwidth_впадина_мм = halfwidth_гребень + зазор", 2380, -700,
-                             operation='ADD')
-    link(tree, halfw_mm, "Value", halfw_groove, "Value")
-    tree.links.new(GI("Стык_зазор_мм"), in_sock(halfw_groove, "Value_001"))
-    height_groove = add_node(tree, "ShaderNodeMath", "5a.hw4",
-                              "высота_впадина_мм = высота_гребень + зазор", 2380, -850,
+    ridge_top_w0 = add_node(tree, "ShaderNodeMath", "5a.rtw0",
+                             "верх_шипа = ширина_основания - скос*2", 1860, -600,
+                             operation='SUBTRACT')
+    tree.links.new(GI("Стык_ширина_мм"), in_sock(ridge_top_w0, "Value"))
+    link(tree, skew2, "Value", ridge_top_w0, "Value_001")
+    ridge_top_w = add_node(tree, "ShaderNodeMath", "5a.rtw",
+                            "верх_шипа = max(..., 0.3мм) - не даём выродиться",
+                            2120, -600, operation='MAXIMUM')
+    link(tree, ridge_top_w0, "Value", ridge_top_w, "Value")
+    in_sock(ridge_top_w, "Value_001").default_value = 0.3
+
+    zazor2 = add_node(tree, "ShaderNodeMath", "5a.zz2", "Стык_зазор_мм * 2",
+                       1600, -750, operation='MULTIPLY')
+    tree.links.new(GI("Стык_зазор_мм"), in_sock(zazor2, "Value"))
+    in_sock(zazor2, "Value_001").default_value = 2.0
+
+    groove_base_w = add_node(tree, "ShaderNodeMath", "5a.gbw",
+                              "низ_паза = ширина_основания_шипа + зазор*2", 2380, -650,
                               operation='ADD')
-    tree.links.new(GI("Стык_высота_мм"), in_sock(height_groove, "Value"))
-    tree.links.new(GI("Стык_зазор_мм"), in_sock(height_groove, "Value_001"))
+    tree.links.new(GI("Стык_ширина_мм"), in_sock(groove_base_w, "Value"))
+    link(tree, zazor2, "Value", groove_base_w, "Value_001")
+    groove_top_w = add_node(tree, "ShaderNodeMath", "5a.gtw",
+                             "верх_паза = верх_шипа + зазор*2", 2380, -800, operation='ADD')
+    link(tree, ridge_top_w, "Value", groove_top_w, "Value")
+    link(tree, zazor2, "Value", groove_top_w, "Value_001")
+    groove_height = add_node(tree, "ShaderNodeMath", "5a.gh",
+                              "высота_паза = высота_шипа + зазор", 2380, -950, operation='ADD')
+    tree.links.new(GI("Стык_высота_мм"), in_sock(groove_height, "Value"))
+    tree.links.new(GI("Стык_зазор_мм"), in_sock(groove_height, "Value_001"))
 
-    frameW = make_frame(tree, "3b. РАЗМЕРЫ ТРЕУГОЛЬНОГО ПРОФИЛЯ (из угла при вершине + зазор)",
-                         [halfw_rad, halfw_deg2, halfw_tan, halfw_mm, halfw_groove, height_groove])
+    frameW = make_frame(
+        tree, "3b. РАЗМЕРЫ ПРОФИЛЯ (скос=0 -> прямоугольное/квадратное сечение, "
+        "скос>0 -> трапеция; паз = шип + зазор)",
+        [skew2, ridge_top_w0, ridge_top_w, zazor2, groove_base_w, groove_top_w, groove_height])
 
-    # NB: halfwidth/height профиля задаются КОНСТАНТАМИ узлов, но реально
-    # зависят от входов Стык_высота_мм/Стык_угол_град/Стык_зазор_мм -
-    # передаём их напрямую через default_value сокетов внутри tri_profile
-    # нельзя (это функция создаёт статичные Math-узлы) - поэтому строим
-    # профиль с УЖЕ вычисленными полями напрямую, минуя параметры функции
-    # (см. ниже: подменяем default_value у newx/newy_apex через отдельные
-    # линки к вычисленным halfw_mm/Стык_высота_мм).
-    def _find(nodes_list, num_prefix, suffix):
-        target = num_prefix + suffix
-        for n in nodes_list:
-            if n.name.startswith(target + " "):
-                return n
-        raise KeyError(target)
+    ridge_fillet, ridge_nodes = trap_profile(
+        "5a.rp", GI("Стык_ширина_мм"), out_sock(ridge_top_w, "Value"), GI("Стык_высота_мм"),
+        1600, -1100, " (шип)")
+    groove_fillet, groove_nodes = trap_profile(
+        "5a.gp", out_sock(groove_base_w, "Value"), out_sock(groove_top_w, "Value"),
+        out_sock(groove_height, "Value"), 1600, -1500, " (паз)")
 
-    ridge_fillet, ridge_nodes = tri_profile("5a.rp", 0.0, 0.0, 1600, -1100, " (гребень)")
-    # Подключаем реальные вычисленные размеры вместо временных заглушек:
-    ridge_newx = _find(ridge_nodes, "5a.rp", "nx")
-    ridge_newya = _find(ridge_nodes, "5a.rp", "nya")
-    tree.links.new(out_sock(halfw_mm, "Value"), in_sock(ridge_newx, "Value_001"))
-    tree.links.new(GI("Стык_высота_мм"), in_sock(ridge_newya, "Value_001"))
-
-    groove_fillet, groove_nodes = tri_profile("5a.gp", 0.0, 0.0, 1600, -1700, " (впадина)")
-    groove_newx = _find(groove_nodes, "5a.gp", "nx")
-    groove_newya = _find(groove_nodes, "5a.gp", "nya")
-    tree.links.new(out_sock(halfw_groove, "Value"), in_sock(groove_newx, "Value_001"))
-    tree.links.new(out_sock(height_groove, "Value"), in_sock(groove_newya, "Value_001"))
-
-    frameProfiles = make_frame(tree, "3c. ПРОФИЛИ (гребень = точный размер, впадина = гребень+зазор)",
+    frameProfiles = make_frame(tree, "3c. ПРОФИЛИ (шип = точный размер, паз = шип+зазор)",
                                 ridge_nodes + groove_nodes)
 
-    # -- выдавить профиль вдоль контура разреза --
-    c2m_ridge = add_node(tree, "GeometryNodeCurveToMesh", "5a.c2mR",
-                          "гребень (тело) = профиль x контур разреза", 2300, -1100)
-    link(tree, b03, "Curve", c2m_ridge, "Curve")
-    link(tree, ridge_fillet, "Curve", c2m_ridge, "Profile Curve")
+    # ------------------------------------------------------------------
+    # 3d. СПЛОШНОЙ РЕЖИМ: выдавить профиль вдоль ВСЕГО контура разреза
+    # (один целый замкнутый "бублик"-тело - НЕ Boolean по позициям,
+    # поэтому нет риска "касательного" краевого дефекта).
+    # ------------------------------------------------------------------
+    c2m_ridge_cont = add_node(tree, "GeometryNodeCurveToMesh", "5a.c2mRc",
+                               "шип (сплошной) = профиль x весь контур разреза", 2300, -1100)
+    link(tree, b03, "Curve", c2m_ridge_cont, "Curve")
+    link(tree, ridge_fillet, "Curve", c2m_ridge_cont, "Profile Curve")
 
-    c2m_groove = add_node(tree, "GeometryNodeCurveToMesh", "5a.c2mG",
-                           "впадина (тело) = профиль x контур разреза", 2300, -1700)
-    link(tree, b03, "Curve", c2m_groove, "Curve")
-    link(tree, groove_fillet, "Curve", c2m_groove, "Profile Curve")
+    c2m_groove_cont = add_node(tree, "GeometryNodeCurveToMesh", "5a.c2mGc",
+                                "паз (сплошной) = профиль x весь контур разреза", 2300, -1500)
+    link(tree, b03, "Curve", c2m_groove_cont, "Curve")
+    link(tree, groove_fillet, "Curve", c2m_groove_cont, "Profile Curve")
 
-    frameSweep = make_frame(tree, "3d. CURVE TO MESH: замкнутые тела гребня и впадины по всему контуру",
-                             [c2m_ridge, c2m_groove])
+    frameSweepCont = make_frame(tree, "3d. СПЛОШНОЙ РЕЖИМ (Curve to Mesh по всему контуру)",
+                                 [c2m_ridge_cont, c2m_groove_cont])
 
-    # -- Часть B (Низ) + гребень (UNION); Часть A (Верх) - впадина (DIFFERENCE) --
+    # ------------------------------------------------------------------
+    # 3e. ПРЕРЫВИСТЫЙ РЕЖИМ: сэмплируем точки вдоль контура с шагом
+    # (сегмент+промежуток), в каждой точке ставим короткий (длина=
+    # сегмент) отрезок-призму того же сечения, с закрытыми торцами
+    # (Fill Caps) - т.к. точка отбора уже находится каждые (сегмент+
+    # промежуток) мм, зазор между соседними отрезками получается сам
+    # собой равным промежутку, без обрезки готового сплошного тела
+    # (которая потребовала бы повторной "починки" открытых краёв - тот
+    # самый ненадёжный приём, отвергнутый ранее в Группе 4).
+    # ------------------------------------------------------------------
+    period = add_node(tree, "ShaderNodeMath", "5a.per", "период = сегмент + промежуток",
+                       1600, -1800, operation='ADD')
+    tree.links.new(GI("Стык_сегмент_мм"), in_sock(period, "Value"))
+    tree.links.new(GI("Стык_промежуток_мм"), in_sock(period, "Value_001"))
+
+    pts = add_node(tree, "GeometryNodeCurveToPoints", "5a.pts",
+                    "точки вдоль контура с шагом = период", 1860, -1800, mode='LENGTH')
+    link(tree, b03, "Curve", pts, "Curve")
+    link(tree, period, "Value", pts, "Length")
+
+    half_seg = add_node(tree, "ShaderNodeMath", "5a.hs", "сегмент/2", 1600, -1950,
+                         operation='MULTIPLY')
+    tree.links.new(GI("Стык_сегмент_мм"), in_sock(half_seg, "Value"))
+    in_sock(half_seg, "Value_001").default_value = 0.5
+    neg_half_seg = add_node(tree, "ShaderNodeMath", "5a.nhs", "-сегмент/2", 1860, -1950,
+                             operation='MULTIPLY')
+    link(tree, half_seg, "Value", neg_half_seg, "Value")
+    in_sock(neg_half_seg, "Value_001").default_value = -1.0
+    seg_start = add_node(tree, "ShaderNodeCombineXYZ", "5a.ss", "(0,0,-сегмент/2)", 2120, -1950)
+    link(tree, neg_half_seg, "Value", seg_start, "Z")
+    seg_end = add_node(tree, "ShaderNodeCombineXYZ", "5a.se", "(0,0,+сегмент/2)", 2120, -2100)
+    link(tree, half_seg, "Value", seg_end, "Z")
+    seg_line = add_node(tree, "GeometryNodeCurvePrimitiveLine", "5a.sl",
+                         "короткий прямой путь вдоль локальной оси Z, длина=сегмент",
+                         2380, -2000)
+    link(tree, seg_start, "Vector", seg_line, "Start")
+    link(tree, seg_end, "Vector", seg_line, "End")
+
+    ridge_prism = add_node(tree, "GeometryNodeCurveToMesh", "5a.rpr",
+                            "отрезок шипа (с закрытыми торцами)", 2640, -1900)
+    link(tree, seg_line, "Curve", ridge_prism, "Curve")
+    link(tree, ridge_fillet, "Curve", ridge_prism, "Profile Curve")
+    in_sock(ridge_prism, "Fill Caps").default_value = True
+
+    groove_prism = add_node(tree, "GeometryNodeCurveToMesh", "5a.gpr",
+                             "отрезок паза (с закрытыми торцами)", 2640, -2150)
+    link(tree, seg_line, "Curve", groove_prism, "Curve")
+    link(tree, groove_fillet, "Curve", groove_prism, "Profile Curve")
+    in_sock(groove_prism, "Fill Caps").default_value = True
+
+    ridge_inst = add_node(tree, "GeometryNodeInstanceOnPoints", "5a.ri",
+                           "отрезки шипа на всех точках", 2900, -1900)
+    link(tree, pts, "Points", ridge_inst, "Points")
+    link(tree, ridge_prism, "Mesh", ridge_inst, "Instance")
+    link(tree, pts, "Rotation", ridge_inst, "Rotation")
+    ridge_real = add_node(tree, "GeometryNodeRealizeInstances", "5a.rr",
+                           "реализовать отрезки шипа в единый меш", 3160, -1900)
+    link(tree, ridge_inst, "Instances", ridge_real, "Geometry")
+
+    groove_inst = add_node(tree, "GeometryNodeInstanceOnPoints", "5a.gi",
+                            "отрезки паза на всех точках", 2900, -2150)
+    link(tree, pts, "Points", groove_inst, "Points")
+    link(tree, groove_prism, "Mesh", groove_inst, "Instance")
+    link(tree, pts, "Rotation", groove_inst, "Rotation")
+    groove_real = add_node(tree, "GeometryNodeRealizeInstances", "5a.gr",
+                            "реализовать отрезки паза в единый меш", 3160, -2150)
+    link(tree, groove_inst, "Instances", groove_real, "Geometry")
+
+    frameSweepSeg = make_frame(
+        tree, "3e. ПРЕРЫВИСТЫЙ РЕЖИМ (точки с шагом=период -> короткие капсулированные "
+        "отрезки-инстансы, зазор между ними = сам шаг минус длина отрезка)",
+        [period, pts, half_seg, neg_half_seg, seg_start, seg_end, seg_line,
+         ridge_prism, groove_prism, ridge_inst, ridge_real, groove_inst, groove_real])
+
+    # -- переключатель сплошной/прерывистый --
+    segs_on = add_node(tree, "FunctionNodeCompare", "5a.sgon", "Стык_сегменты_вкл > 0.5?",
+                        2380, -1650, data_type='FLOAT', operation='GREATER_THAN')
+    tree.links.new(GI("Стык_сегменты_вкл"), in_sock(segs_on, "A"))
+    in_sock(segs_on, "B").default_value = 0.5
+
+    c2m_ridge_sw = add_node(tree, "GeometryNodeSwitch", "5a.rsw", "шип: сплошной или прерывистый?",
+                             3420, -1300, input_type='GEOMETRY')
+    link(tree, segs_on, "Result", c2m_ridge_sw, "Switch_001")
+    link(tree, c2m_ridge_cont, "Mesh", c2m_ridge_sw, "False_006")
+    link(tree, ridge_real, "Geometry", c2m_ridge_sw, "True_006")
+
+    c2m_groove_sw = add_node(tree, "GeometryNodeSwitch", "5a.gsw", "паз: сплошной или прерывистый?",
+                              3420, -1600, input_type='GEOMETRY')
+    link(tree, segs_on, "Result", c2m_groove_sw, "Switch_001")
+    link(tree, c2m_groove_cont, "Mesh", c2m_groove_sw, "False_006")
+    link(tree, groove_real, "Geometry", c2m_groove_sw, "True_006")
+
+    frameSwSeg = make_frame(tree, "3f. ВЫБОР: сплошной или прерывистый режим",
+                             [segs_on, c2m_ridge_sw, c2m_groove_sw])
+
+    c2m_ridge = out_sock(c2m_ridge_sw, "Output_006")
+    c2m_groove = out_sock(c2m_groove_sw, "Output_006")
+
+    # ------------------------------------------------------------------
+    # 3g. РЕБРО ЖЁСТКОСТИ (опционально): местное утолщение стенки вдоль
+    # шва С ВНУТРЕННЕЙ СТОРОНЫ каждой детали (не со стороны шипа/паза,
+    # а В ГЛУБЬ детали, противоположно шипу) - шире шипа, но не заходит
+    # на внешнюю (видимую) сторону разреза, добавляется симметрично
+    # UNION-ом в ОБЕ детали (это не парная посадка шип<->паз, а
+    # независимое усиление каждой стороны). Прямоугольный профиль:
+    # Низ получает ребро в сторону от шипа (Y>0 в конвенции профиля),
+    # Верх - глубже в свою сторону (Y<0, за пределы паза).
+    # ------------------------------------------------------------------
+    rib_w = GI("Стык_ребро_ширина_мм")
+    rib_h = GI("Стык_ребро_высота_мм")
+
+    # -- Низ: строим ребро в СТАНДАРТНОЙ конвенции trap_profile (основание
+    # -> Y=0, узкий конец -> Y=-rib_h, как у шипа), затем ЯВНО переворачиваем
+    # отдельным Transform (Scale Y=-1) в противоположную от шипа сторону
+    # (Y=0..+rib_h) - вместо того, чтобы полагаться на непроверенное
+    # поведение примитива Quadrilateral с ОТРИЦАТЕЛЬНЫМ Height (риск: могло
+    # обрезаться/вырождаться по-другому, что и давало всплеск дефектов).
+    rib_low_fillet0, rib_low_nodes0 = trap_profile(
+        "5a.rlp", rib_w, rib_w, rib_h, 1600, -2450,
+        " (ребро, Низ, база)")
+    rib_low_flip = add_node(tree, "GeometryNodeTransform", "5a.rlf",
+                             "развернуть ребро Низа в сторону от шипа (Y>0)", 1900, -2450)
+    link(tree, rib_low_fillet0, "Curve", rib_low_flip, "Geometry")
+    in_sock(rib_low_flip, "Scale").default_value = (1.0, -1.0, 1.0)
+    rib_low_fillet = rib_low_flip
+    rib_low_nodes = rib_low_nodes0 + [rib_low_flip]
+
+    # -- Верх: ребро строим в той же стандартной конвенции (Y=0..-rib_h),
+    # затем СДВИГАЕМ отдельным Transform на -groove_height, чтобы оно легло
+    # ЗА пределами уже вырезанного паза (паз занимает Y=0..-groove_height),
+    # а не поверх/внутри него - иначе UNION ребра заново "затыкал" бы
+    # только что прорезанную DIFFERENCE-ом полость паза (само-пересечение).
+    rib_high_fillet0, rib_high_nodes0 = trap_profile(
+        "5a.rhp", rib_w, rib_w, rib_h, 1600, -2750, " (ребро, Верх, база)")
+    neg_groove_h = add_node(tree, "ShaderNodeMath", "5a.ngh", "-высота_паза",
+                             1900, -2650, operation='MULTIPLY')
+    link(tree, groove_height, "Value", neg_groove_h, "Value")
+    in_sock(neg_groove_h, "Value_001").default_value = -1.0
+    rib_high_shift_vec = add_node(tree, "ShaderNodeCombineXYZ", "5a.rhsv",
+                                   "сдвиг = (0,-высота_паза,0)", 2100, -2650)
+    link(tree, neg_groove_h, "Value", rib_high_shift_vec, "Y")
+    rib_high_shift = add_node(tree, "GeometryNodeTransform", "5a.rhs",
+                               "сдвинуть ребро Верха за пределы паза", 2200, -2750)
+    link(tree, rib_high_fillet0, "Curve", rib_high_shift, "Geometry")
+    link(tree, rib_high_shift_vec, "Vector", rib_high_shift, "Translation")
+    rib_high_fillet = rib_high_shift
+    rib_high_nodes = rib_high_nodes0 + [neg_groove_h, rib_high_shift_vec, rib_high_shift]
+
+    c2m_rib_low = add_node(tree, "GeometryNodeCurveToMesh", "5a.c2mRL",
+                            "ребро Низ (сплошное, по контуру)", 2300, -2450)
+    link(tree, b03, "Curve", c2m_rib_low, "Curve")
+    link(tree, rib_low_fillet, "Geometry", c2m_rib_low, "Profile Curve")
+
+    c2m_rib_high = add_node(tree, "GeometryNodeCurveToMesh", "5a.c2mRH",
+                             "ребро Верх (сплошное, по контуру)", 2300, -2750)
+    link(tree, b03, "Curve", c2m_rib_high, "Curve")
+    link(tree, rib_high_fillet, "Geometry", c2m_rib_high, "Profile Curve")
+
+    rib_on = add_node(tree, "FunctionNodeCompare", "5a.ribon", "Стык_ребро_вкл > 0.5?",
+                       2600, -2600, data_type='FLOAT', operation='GREATER_THAN')
+    tree.links.new(GI("Стык_ребро_вкл"), in_sock(rib_on, "A"))
+    in_sock(rib_on, "B").default_value = 0.5
+    empty_rib = add_node(tree, "GeometryNodeMeshCube", "5a.ribe", "пусто (ребро выкл.)",
+                          2300, -2900)
+    in_sock(empty_rib, "Size").default_value = (0.0, 0.0, 0.0)
+    rib_low_sw = add_node(tree, "GeometryNodeSwitch", "5a.rlsw", "ребро Низ вкл?", 2900, -2450,
+                           input_type='GEOMETRY')
+    link(tree, rib_on, "Result", rib_low_sw, "Switch_001")
+    link(tree, empty_rib, "Mesh", rib_low_sw, "False_006")
+    link(tree, c2m_rib_low, "Mesh", rib_low_sw, "True_006")
+    rib_high_sw = add_node(tree, "GeometryNodeSwitch", "5a.rhsw", "ребро Верх вкл?", 2900, -2750,
+                            input_type='GEOMETRY')
+    link(tree, rib_on, "Result", rib_high_sw, "Switch_001")
+    link(tree, empty_rib, "Mesh", rib_high_sw, "False_006")
+    link(tree, c2m_rib_high, "Mesh", rib_high_sw, "True_006")
+
+    frameRib = make_frame(
+        tree, "3g. РЕБРО ЖЁСТКОСТИ (опционально, Стык_ребро_вкл=0 отключает) - "
+        "утолщение стенки с внутренней стороны шва, в обе детали симметрично",
+        rib_low_nodes + rib_high_nodes +
+        [c2m_rib_low, c2m_rib_high, rib_on, empty_rib, rib_low_sw, rib_high_sw])
+
+    # -- Часть B (Низ) + шип + ребро (UNION); Часть A (Верх) - паз, + ребро (DIFFERENCE паза, UNION ребра) --
     # ВАЖНО: у GeometryNodeMeshBoolean сокет "Mesh 2" - МУЛЬТИ-ВХОД (list),
-    # оба операнда UNION/INTERSECT подаются раздельными линками именно в
-    # него (см. n10/n11 выше) - это настоящий CSG-буллин, а НЕ
-    # Join+Merge By Distance (тот годится только для сшивки НЕПЕРЕСЕКАЮЩИХСЯ
-    # кусков по общему шву, как в Группе 3 - здесь же тело гребня
-    # ОБЪЁМНО пересекается с телом Низа, простое сваривание вершин
-    # оставило бы внутренние задвоенные грани).
-    unionB0 = add_node(tree, "GeometryNodeMeshBoolean", "5a.j2", "Низ UNION гребень",
-                        2600, -300, operation='UNION')
+    # оба/все операнда UNION подаются раздельными линками именно в него
+    # (см. n10/n11 выше) - это настоящий CSG-буллин, а НЕ Join+Merge By
+    # Distance (тот годится только для сшивки НЕПЕРЕСЕКАЮЩИХСЯ кусков по
+    # общему шву, как в Группе 3 - здесь же тела шипа/ребра ОБЪЁМНО
+    # пересекаются с телом Низа, простое сваривание вершин оставило бы
+    # внутренние задвоенные грани).
+    unionB0 = add_node(tree, "GeometryNodeMeshBoolean", "5a.j2", "Низ UNION шип UNION ребро",
+                        3420, -300, operation='UNION')
     tree.links.new(n13.outputs["Mesh"], in_sock(unionB0, "Mesh 2"))
-    tree.links.new(c2m_ridge.outputs["Mesh"], in_sock(unionB0, "Mesh 2"))
+    tree.links.new(c2m_ridge, in_sock(unionB0, "Mesh 2"))
+    tree.links.new(out_sock(rib_low_sw, "Output_006"), in_sock(unionB0, "Mesh 2"))
     unionB = add_node(tree, "GeometryNodeMergeByDistance", "5a.j2m",
-                       "сварить близкие вершины после буллина (0.01мм)", 2860, -300)
+                       "сварить близкие вершины после буллина (0.01мм)", 3680, -300)
     link(tree, unionB0, "Mesh", unionB, "Geometry")
     in_sock(unionB, "Distance").default_value = 0.01
 
-    diffA0 = add_node(tree, "GeometryNodeMeshBoolean", "5a.j3", "Верх DIFFERENCE впадина",
-                       2600, 250, operation='DIFFERENCE')
+    diffA0 = add_node(tree, "GeometryNodeMeshBoolean", "5a.j3", "Верх DIFFERENCE паз",
+                       3420, 250, operation='DIFFERENCE')
     tree.links.new(n12.outputs["Mesh"], in_sock(diffA0, "Mesh 1"))
-    tree.links.new(c2m_groove.outputs["Mesh"], in_sock(diffA0, "Mesh 2"))
+    tree.links.new(c2m_groove, in_sock(diffA0, "Mesh 2"))
+    diffA1 = add_node(tree, "GeometryNodeMeshBoolean", "5a.j3b", "+ ребро (UNION)",
+                       3680, 250, operation='UNION')
+    tree.links.new(diffA0.outputs["Mesh"], in_sock(diffA1, "Mesh 2"))
+    tree.links.new(out_sock(rib_high_sw, "Output_006"), in_sock(diffA1, "Mesh 2"))
     diffA = add_node(tree, "GeometryNodeMergeByDistance", "5a.j3m",
-                      "сварить близкие вершины после буллина (0.01мм)", 2860, 250)
-    link(tree, diffA0, "Mesh", diffA, "Geometry")
+                      "сварить близкие вершины после буллина (0.01мм)", 3940, 250)
+    link(tree, diffA1, "Mesh", diffA, "Geometry")
     in_sock(diffA, "Distance").default_value = 0.01
 
-    frameJoin = make_frame(tree, "3e. UNION гребня в Низ / DIFFERENCE впадины из Верх + сварка",
-                            [unionB0, unionB, diffA0, diffA])
+    frameJoin = make_frame(tree, "3h. UNION шип+ребро в Низ / DIFFERENCE паза + UNION ребра из Верх + сварка",
+                            [unionB0, unionB, diffA0, diffA1, diffA])
 
-    # -- переключатель: Стык_вкл=0 -> обычный плоский срез (без гребня) --
-    swA = add_node(tree, "GeometryNodeSwitch", "5a.swA", "Часть_A: со впадиной или плоская?",
-                    2900, 250, input_type='GEOMETRY')
-    joint_on = add_node(tree, "FunctionNodeCompare", "5a.jon", "Стык_вкл > 0.5?", 2600, 500,
+    # -- переключатель: Стык_вкл=0 -> обычный плоский срез (без шипа/паза/ребра) --
+    swA = add_node(tree, "GeometryNodeSwitch", "5a.swA", "Часть_A: с пазом или плоская?",
+                    3900, 250, input_type='GEOMETRY')
+    joint_on = add_node(tree, "FunctionNodeCompare", "5a.jon", "Стык_вкл > 0.5?", 3420, 500,
                          data_type='FLOAT', operation='GREATER_THAN')
     tree.links.new(GI("Стык_вкл"), in_sock(joint_on, "A"))
     in_sock(joint_on, "B").default_value = 0.5
@@ -488,13 +638,13 @@ def build_cut(cap_tree):
     tree.links.new(n12.outputs["Mesh"], in_sock(swA, "False_006"))
     link(tree, diffA, "Geometry", swA, "True_006")
 
-    swB = add_node(tree, "GeometryNodeSwitch", "5a.swB", "Часть_B: с гребнем или плоская?",
-                    3380, -300, input_type='GEOMETRY')
+    swB = add_node(tree, "GeometryNodeSwitch", "5a.swB", "Часть_B: с шипом или плоская?",
+                    4180, -300, input_type='GEOMETRY')
     link(tree, joint_on, "Result", swB, "Switch_001")
     tree.links.new(n13.outputs["Mesh"], in_sock(swB, "False_006"))
     link(tree, unionB, "Geometry", swB, "True_006")
 
-    frameSwitch = make_frame(tree, "3f. Стык_вкл=0 -> вернуть обычный плоский срез без гребня",
+    frameSwitch = make_frame(tree, "3i. Стык_вкл=0 -> вернуть обычный плоский срез без шипа/паза",
                               [joint_on, swA, swB])
 
     tree.links.new(out_sock(swA, "Output_006"), gout.inputs["Часть_A"])
@@ -521,16 +671,28 @@ def build_print(cut_tree):
               description="Наклон плоскости разреза от горизонтали - делает стык менее заметным "
                            "и увеличивает площадь склейки.")
     add_input(tree, "Стык_вкл", "NodeSocketFloat", default=1.0, min_value=0.0, max_value=1.0,
-              description="1 = треугольный гребень/впадина по ВСЕМУ периметру разреза (и Перед, "
-                           "и Зад). 0 = обычный плоский срез без гребня.")
-    add_input(tree, "Стык_высота_мм", "NodeSocketFloat", default=1.0, min_value=0.2, max_value=3.0,
-              description="Высота треугольного гребня по нормали к плоскости разреза, мм.")
-    add_input(tree, "Стык_угол_град", "NodeSocketFloat", default=60.0, min_value=20.0, max_value=100.0,
-              description="Угол при вершине треугольного профиля гребня, градусы.")
+              description="1 = шип/паз (трапециевидного или прямоугольного сечения) по периметру "
+                           "разреза (и Перед, и Зад). 0 = обычный плоский срез без шипа.")
+    add_input(tree, "Стык_высота_мм", "NodeSocketFloat", default=1.2, min_value=0.3, max_value=3.0,
+              description="Высота шипа по нормали к плоскости разреза, мм.")
+    add_input(tree, "Стык_ширина_мм", "NodeSocketFloat", default=2.0, min_value=0.5, max_value=6.0,
+              description="Ширина основания шипа, мм.")
+    add_input(tree, "Стык_скос_мм", "NodeSocketFloat", default=0.4, min_value=0.0, max_value=2.0,
+              description="Скос с каждой стороны (0=прямоугольное/квадратное сечение, "
+                           ">0=трапециевидное), мм.")
     add_input(tree, "Стык_зазор_мм", "NodeSocketFloat", default=0.1, min_value=0.0, max_value=1.0,
-              description="Зазор впадина<->гребень (клей, допуски печати), мм.")
+              description="Зазор паз<->шип (клей, допуски печати), мм.")
     add_input(tree, "Кромка_радиус_мм", "NodeSocketFloat", default=0.2, min_value=0.05, max_value=1.0,
-              description="Скругление кромок треугольного профиля (Fillet Curve, единый радиус).")
+              description="Скругление углов сечения шипа (Fillet Curve).")
+    add_input(tree, "Стык_сегменты_вкл", "NodeSocketFloat", default=0.0, min_value=0.0, max_value=1.0,
+              description="0 = шип/паз сплошной; 1 = прерывистый (Стык_сегмент_мм/"
+                           "Стык_промежуток_мм).")
+    add_input(tree, "Стык_сегмент_мм", "NodeSocketFloat", default=10.0, min_value=3.0, max_value=40.0)
+    add_input(tree, "Стык_промежуток_мм", "NodeSocketFloat", default=10.0, min_value=3.0, max_value=40.0)
+    add_input(tree, "Стык_ребро_вкл", "NodeSocketFloat", default=0.0, min_value=0.0, max_value=1.0,
+              description="1 = добавить местное утолщение стенки (ребро жёсткости) вдоль шва.")
+    add_input(tree, "Стык_ребро_высота_мм", "NodeSocketFloat", default=1.5, min_value=0.5, max_value=6.0)
+    add_input(tree, "Стык_ребро_ширина_мм", "NodeSocketFloat", default=3.0, min_value=1.5, max_value=10.0)
 
     add_output(tree, "VIS_Вместе", "NodeSocketGeometry")
     add_output(tree, "Перед_Низ", "NodeSocketGeometry")
@@ -621,25 +783,31 @@ def build_print(cut_tree):
     # ------------------------------------------------------------------
     # 3. РАЗРЕЗ Перед и Зад
     # ------------------------------------------------------------------
+    def wire_cut_joint(cut_grp):
+        tree.links.new(GI("Стык_вкл"), cut_grp.inputs["Стык_вкл"])
+        tree.links.new(GI("Стык_высота_мм"), cut_grp.inputs["Стык_высота_мм"])
+        tree.links.new(GI("Стык_ширина_мм"), cut_grp.inputs["Стык_ширина_мм"])
+        tree.links.new(GI("Стык_скос_мм"), cut_grp.inputs["Стык_скос_мм"])
+        tree.links.new(GI("Стык_зазор_мм"), cut_grp.inputs["Стык_зазор_мм"])
+        tree.links.new(GI("Кромка_радиус_мм"), cut_grp.inputs["Кромка_радиус_мм"])
+        tree.links.new(GI("Стык_сегменты_вкл"), cut_grp.inputs["Стык_сегменты_вкл"])
+        tree.links.new(GI("Стык_сегмент_мм"), cut_grp.inputs["Стык_сегмент_мм"])
+        tree.links.new(GI("Стык_промежуток_мм"), cut_grp.inputs["Стык_промежуток_мм"])
+        tree.links.new(GI("Стык_ребро_вкл"), cut_grp.inputs["Стык_ребро_вкл"])
+        tree.links.new(GI("Стык_ребро_высота_мм"), cut_grp.inputs["Стык_ребро_высота_мм"])
+        tree.links.new(GI("Стык_ребро_ширина_мм"), cut_grp.inputs["Стык_ребро_ширина_мм"])
+
     cutF = _grp(tree, cut_tree, "5.15", "Разрез: Перед", 800, 300)
     tree.links.new(GI("Перед"), cutF.inputs["Geometry"])
     tree.links.new(n11.outputs["Vector"], cutF.inputs["Точка_на_плоскости"])
     tree.links.new(n14.outputs["Vector"], cutF.inputs["Нормаль_плоскости"])
-    tree.links.new(GI("Стык_вкл"), cutF.inputs["Стык_вкл"])
-    tree.links.new(GI("Стык_высота_мм"), cutF.inputs["Стык_высота_мм"])
-    tree.links.new(GI("Стык_угол_град"), cutF.inputs["Стык_угол_град"])
-    tree.links.new(GI("Стык_зазор_мм"), cutF.inputs["Стык_зазор_мм"])
-    tree.links.new(GI("Кромка_радиус_мм"), cutF.inputs["Кромка_радиус_мм"])
+    wire_cut_joint(cutF)
 
     cutB = _grp(tree, cut_tree, "5.16", "Разрез: Зад", 800, 100)
     tree.links.new(GI("Зад"), cutB.inputs["Geometry"])
     tree.links.new(n11.outputs["Vector"], cutB.inputs["Точка_на_плоскости"])
     tree.links.new(n14.outputs["Vector"], cutB.inputs["Нормаль_плоскости"])
-    tree.links.new(GI("Стык_вкл"), cutB.inputs["Стык_вкл"])
-    tree.links.new(GI("Стык_высота_мм"), cutB.inputs["Стык_высота_мм"])
-    tree.links.new(GI("Стык_угол_град"), cutB.inputs["Стык_угол_град"])
-    tree.links.new(GI("Стык_зазор_мм"), cutB.inputs["Стык_зазор_мм"])
-    tree.links.new(GI("Кромка_радиус_мм"), cutB.inputs["Кромка_радиус_мм"])
+    wire_cut_joint(cutB)
 
     frame3 = make_frame(
         tree, "3. РАЗРЕЗ ПЕРЕД И ЗАД, С ТРЕУГОЛЬНЫМ ГРЕБНЕМ/ВПАДИНОЙ ПО ВСЕМУ ПЕРИМЕТРУ "
