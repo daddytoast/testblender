@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Автоматическая проверка Группы 5 ("NK.5_Печать"), нанизанной на
-полную цепочку Группа1 -> 2 -> 3 -> 4 -> 5.
+полную цепочку Группа1 -> 2 -> 3 -> 5 (Группа 4 удалена из проекта,
+правки 220926).
 
 Запуск:
     blender --background --python scripts/verify_group5.py -- <out_dir>
@@ -14,8 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bpy
 from build_group1_axis import build as build_axis
 from build_group2_profile import build as build_profile
-from build_group3_shell import build_all_groups as build_shell_all, SAMPLER_NAME
-from build_group4_inserts import build_all_groups as build_inserts_all
+from build_group3_shell import build_all_groups as build_shell_all
 from build_group5_print import build_all_groups as build_print_all
 
 
@@ -61,19 +61,13 @@ def mesh_stats(me):
     return {"n": len(verts), "bbox": (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))}
 
 
-def build_full_master(skip_group4=True):
-    """skip_group4=True (по умолчанию, правки 220926): временно убираем
-    Группу 4 из цепочки, чтобы прорабатывать соединение Группы 5 на
-    чистых Перед/Зад из Группы 3, без дополнительной сложности/дефектов
-    от закладных. Перед->Группа5 напрямую из Группы 3 в этом режиме.
-    """
+def build_full_master():
+    """Полная цепочка Группа 1 -> 2 -> 3 -> 5 (Группа 4 удалена из
+    проекта, правки 220926 - были только закладные под хомуты/магниты,
+    больше не нужны без пазов/креплений)."""
     axis_tree = build_axis()
     profile_tree = build_profile()
     shell_tree = build_shell_all()
-    sampler_tree = bpy.data.node_groups[SAMPLER_NAME]
-    g4_tree = None
-    if not skip_group4:
-        g4_tree = build_inserts_all(sampler_tree=sampler_tree)
     print_tree = build_print_all()
 
     name = "NK_Group5_Demo"
@@ -92,9 +86,6 @@ def build_full_master(skip_group4=True):
     g1 = master.nodes.new("GeometryNodeGroup"); g1.node_tree = axis_tree; g1.location = (-800, 0)
     g2 = master.nodes.new("GeometryNodeGroup"); g2.node_tree = profile_tree; g2.location = (-400, 0)
     g3 = master.nodes.new("GeometryNodeGroup"); g3.node_tree = shell_tree; g3.location = (0, 0)
-    g4 = None
-    if not skip_group4:
-        g4 = master.nodes.new("GeometryNodeGroup"); g4.node_tree = g4_tree; g4.location = (400, 0)
     g5 = master.nodes.new("GeometryNodeGroup"); g5.node_tree = print_tree; g5.location = (800, 0)
 
     master.links.new(g1.outputs["Ось_кривая"], g2.inputs["Ось_кривая"])
@@ -103,21 +94,8 @@ def build_full_master(skip_group4=True):
     master.links.new(g2.outputs["Профиль_точки"], g3.inputs["Профиль_точки"])
     master.links.new(g2.outputs["Точек_в_кольце"], g3.inputs["Точек_в_кольце"])
 
-    if skip_group4:
-        master.links.new(g3.outputs["Перед"], g5.inputs["Перед"])
-        master.links.new(g3.outputs["Зад"], g5.inputs["Зад"])
-    else:
-        master.links.new(g3.outputs["Перед"], g4.inputs["Перед"])
-        master.links.new(g3.outputs["Зад"], g4.inputs["Зад"])
-        master.links.new(g1.outputs["Точка_A"], g4.inputs["Точка_A"])
-        master.links.new(g1.outputs["Точка_B"], g4.inputs["Точка_B"])
-        master.links.new(g2.outputs["Профиль_точки"], g4.inputs["Профиль_точки"])
-        master.links.new(g2.outputs["Точек_в_кольце"], g4.inputs["Точек_в_кольце"])
-        master.links.new(g2.outputs["Колец_всего"], g4.inputs["Колец_всего"])
-        master.links.new(g1.outputs["Факт_длина_дуги_мм"], g4.inputs["Длина_сегмента_мм"])
-        master.links.new(g4.outputs["Перед"], g5.inputs["Перед"])
-        master.links.new(g4.outputs["Зад"], g5.inputs["Зад"])
-
+    master.links.new(g3.outputs["Перед"], g5.inputs["Перед"])
+    master.links.new(g3.outputs["Зад"], g5.inputs["Зад"])
     master.links.new(g1.outputs["Точка_A"], g5.inputs["Точка_A"])
     master.links.new(g1.outputs["Точка_B"], g5.inputs["Точка_B"])
 
@@ -132,11 +110,11 @@ def build_full_master(skip_group4=True):
     master.links.new(g5.outputs["Провер_Отчёт"], gout.inputs["Провер_Отчёт"])
     master.links.new(g5.outputs["Число_сегментов"], gout.inputs["Число_сегментов"])
 
-    return obj, mod, master, g1, g2, g3, g4, g5, print_tree
+    return obj, mod, master, g1, g2, g3, g5, print_tree
 
 
-def run_case(label, g5_params, out_dir, skip_group4=True):
-    obj, mod, master, g1, g2, g3, g4, g5, print_tree = build_full_master(skip_group4=skip_group4)
+def run_case(label, g5_params, out_dir):
+    obj, mod, master, g1, g2, g3, g5, print_tree = build_full_master()
 
     for k, v in g5_params.items():
         set_input(g5, print_tree, k, v)
@@ -223,20 +201,6 @@ def main():
     results.append(run_case("fits_whole", {"Печать_Z_мм": 400.0}, out_dir))  # 1 segment
     results.append(run_case("no_tilt", {"Наклон_шва_град": 0.0}, out_dir))
     results.append(run_case("steep_tilt", {"Наклон_шва_град": 22.0}, out_dir))
-    results.append(run_case("joint_off", {"Стык_вкл": 0.0}, out_dir))
-    results.append(run_case("joint_square", {"Стык_скос_мм": 0.0}, out_dir))
-    results.append(run_case("joint_segmented", {"Стык_сегменты_вкл": 1.0}, out_dir))
-    results.append(run_case("joint_segmented_square",
-                             {"Стык_сегменты_вкл": 1.0, "Стык_скос_мм": 0.0}, out_dir))
-    results.append(run_case("joint_with_rib", {"Стык_ребро_вкл": 1.0}, out_dir))
-    results.append(run_case("joint_segmented_with_rib",
-                             {"Стык_сегменты_вкл": 1.0, "Стык_ребро_вкл": 1.0}, out_dir))
-    # Последний кейс: ПОЛНАЯ цепочка 1->2->3->4->5 (Группа 4 НЕ пропущена) с
-    # новым паз/шип соединением по умолчанию - санитарная проверка, что
-    # новый стык не ломается в сочетании с закладными Группы 4, и именно
-    # это состояние остаётся сохранённым в builds/group5_print.blend ниже
-    # (остальные кейсы выше - Группа 4 временно пропущена, см. skip_group4).
-    results.append(run_case("full_pipeline_with_group4", {}, out_dir, skip_group4=False))
 
     print("\n=== ИТОГ ===")
     all_ok = True
